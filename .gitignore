@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Lokale Daten / Logs (in der Cloud via persistentem Volume bzw. CT_DB_PATH)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Temporäre Analyse-/Testskripte
+_smoke*.py
+_analyze*.py
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/

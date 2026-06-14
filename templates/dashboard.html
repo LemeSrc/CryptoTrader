@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CryptoTrader Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+<style>
+  :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,system-ui,sans-serif;font-size:14px;}
+  header{padding:16px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+  header h1{font-size:18px;margin:0;}
+  .badge{background:#1f6feb33;color:var(--blue);padding:3px 10px;border-radius:12px;font-size:12px;}
+  main{padding:20px 24px;max-width:1400px;margin:0 auto;}
+  .grid{display:grid;gap:16px;}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:20px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;}
+  .card .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px;}
+  .card .value{font-size:24px;font-weight:600;margin-top:6px;}
+  .pos{color:var(--green);} .neg{color:var(--red);}
+  section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px;}
+  section h2{font-size:15px;margin:0 0 14px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--card);}
+  tr:hover td{background:#1c2128;}
+  .scroll{max-height:460px;overflow:auto;}
+  .tag{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;}
+  .long{background:#3fb95022;color:var(--green);} .short{background:#f8514922;color:var(--red);}
+  select,button{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer;}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
+  a.btn{background:var(--blue);color:#0d1117;text-decoration:none;padding:6px 12px;border-radius:6px;font-weight:600;}
+  button.danger{background:var(--red);color:#0d1117;border:none;font-weight:600;}
+  .rangebar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px;padding:12px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;}
+  .rangebar label{color:var(--muted);}
+  .two{grid-template-columns:1fr 1fr;}
+  @media(max-width:900px){.two{grid-template-columns:1fr;}}
+  .muted{color:var(--muted);}
+  details summary{cursor:pointer;color:var(--blue);}
+  canvas{max-height:300px;}
+  nav.tabs{display:flex;gap:4px;}
+  nav.tabs button{background:transparent;border:1px solid transparent;border-bottom:2px solid transparent;border-radius:6px 6px 0 0;padding:8px 16px;color:var(--muted);font-size:14px;}
+  nav.tabs button.active{color:var(--text);border-bottom-color:var(--blue);background:var(--card);}
+  .tab[hidden]{display:none;}
+  #priceChart{max-height:520px;}
+  .clickable{cursor:pointer;color:var(--blue);}
+  .clickable:hover{text-decoration:underline;}
+  .chart-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
+  .legend-note{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px;}
+  .legend-note span{display:inline-flex;align-items:center;gap:6px;}
+  .swatch{width:12px;height:12px;border-radius:3px;display:inline-block;}
+</style>
+</head>
+<body>
+<header>
+  <h1>📈 CryptoTrader Dashboard <span class="badge">PAPER-MODUS</span></h1>
+  <nav class="tabs">
+    <button id="tabbtn-overview" class="active" onclick="showTab('overview')">Übersicht</button>
+    <button id="tabbtn-charts" onclick="showTab('charts')">Charts</button>
+  </nav>
+  <div>
+    <a class="btn" href="/export.csv">⬇ Trades als CSV</a>
+    <button onclick="loadAll()">↻ Aktualisieren</button>
+    <button class="danger" onclick="resetData()">🗑 Reset</button>
+  </div>
+</header>
+<main>
+<div id="tab-overview" class="tab">
+  <div class="rangebar">
+    <label>Zeitraum betrachten:</label>
+    <select id="fRange">
+      <option value="all">Gesamt</option>
+      <option value="24h">Letzte 24 Stunden</option>
+      <option value="7d">Letzte 7 Tage</option>
+      <option value="30d">Letzte 30 Tage</option>
+    </select>
+    <label>Session:</label>
+    <select id="fSession">
+      <option value="all">Alle Sessions</option>
+      <option value="asia">Asia (00–08 UTC)</option>
+      <option value="europe">Europa (07–16 UTC)</option>
+      <option value="us">US (13–22 UTC)</option>
+    </select>
+    <button onclick="loadAll()">Neuen Zeitraum betrachten</button>
+  </div>
+
+  <div class="grid cards" id="cards"></div>
+
+  <section>
+    <h2>Equity-Verlauf ({{ quote }})</h2>
+    <canvas id="equityChart"></canvas>
+  </section>
+
+  <div class="grid two">
+    <section>
+      <h2>Auswertung nach Richtung</h2>
+      <div id="bySide"></div>
+    </section>
+    <section>
+      <h2>Auswertung nach Exit-Grund</h2>
+      <div id="byReason"></div>
+    </section>
+  </div>
+
+  <div class="grid two">
+    <section>
+      <h2>Gewinnrate nach Einstiegs-RSI</h2>
+      <canvas id="rsiChart"></canvas>
+    </section>
+    <section>
+      <h2>Gewinnrate nach Einstiegs-Score</h2>
+      <canvas id="scoreChart"></canvas>
+    </section>
+  </div>
+
+  <section>
+    <h2>Gewinnrate nach Tageszeit (Einstiegs-Stunde, lokale Zeit)</h2>
+    <canvas id="hourChart"></canvas>
+  </section>
+
+  <section>
+    <h2>Auswertung nach Strategie <span class="muted">(welche Strategie wann am besten läuft)</span></h2>
+    <div class="scroll" id="byStrategy"></div>
+  </section>
+
+  <section>
+    <h2>Top-Coins (nach Trade-Anzahl)</h2>
+    <div class="scroll" id="bySymbol"></div>
+  </section>
+
+  <section>
+    <h2>Offene Positionen</h2>
+    <div class="scroll" id="openTable"></div>
+  </section>
+
+  <section>
+    <h2>Geschlossene Trades</h2>
+    <div class="filters">
+      <select id="fSide"><option value="">Richtung: alle</option><option value="long">Long</option><option value="short">Short</option></select>
+      <select id="fReason"><option value="">Exit: alle</option><option value="take_profit">Take-Profit</option><option value="stop_loss">Stop-Loss</option><option value="opposite">Gegensignal</option><option value="timeout">Timeout</option></select>
+      <select id="fResult"><option value="">Ergebnis: alle</option><option value="win">Gewinn</option><option value="loss">Verlust</option></select>
+      <button onclick="loadTrades()">Filtern</button>
+    </div>
+    <div class="scroll" id="tradesTable"></div>
+  </section>
+</div><!-- /tab-overview -->
+
+<div id="tab-charts" class="tab" hidden>
+  <section>
+    <h2>Coin-Chart mit Trades</h2>
+    <div class="chart-controls">
+      <select id="chSymbol"></select>
+      <select id="chInterval">
+        <option value="15m">15m</option>
+        <option value="1h">1h</option>
+        <option value="4h">4h</option>
+        <option value="1d">1d</option>
+        <option value="5m">5m</option>
+      </select>
+      <select id="chLimit">
+        <option value="200">200 Candles</option>
+        <option value="300" selected>300 Candles</option>
+        <option value="500">500 Candles</option>
+        <option value="1000">1000 Candles</option>
+      </select>
+      <button onclick="loadChart()">Laden</button>
+      <span id="chStatus" class="muted"></span>
+    </div>
+    <canvas id="priceChart"></canvas>
+    <div class="legend-note">
+      <span><span class="swatch" style="background:#3fb950"></span>Long-Einstieg</span>
+      <span><span class="swatch" style="background:#f85149"></span>Short-Einstieg</span>
+      <span><span class="swatch" style="background:#58a6ff"></span>Offene Position</span>
+      <span><span class="swatch" style="background:#f85149;height:3px;border-radius:0"></span>Stop-Loss</span>
+      <span><span class="swatch" style="background:#3fb950;height:3px;border-radius:0"></span>Take-Profit</span>
+      <span><span class="swatch" style="background:#8b949e;height:3px;border-radius:0"></span>Entry→Exit</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Offene Positionen für <span id="chSymbolLabel" class="muted">–</span></h2>
+    <div class="scroll" id="chOpenTable"></div>
+  </section>
+</div><!-- /tab-charts -->
+</main>
+
+<script>
+const fmt=(n,d=2)=>n==null?'–':Number(n).toLocaleString('de-DE',{minimumFractionDigits:d,maximumFractionDigits:d});
+const cls=n=>n>0?'pos':(n<0?'neg':'');
+let equityChart,rsiChart,scoreChart,hourChart;
+
+async function getJSON(u){const r=await fetch(u);return r.json();}
+
+// Aktuelle Zeitraum-/Session-Auswahl als Query-Parameter
+function rangeParams(){
+  const p=new URLSearchParams();
+  const r=document.getElementById('fRange').value;
+  const s=document.getElementById('fSession').value;
+  if(r&&r!=='all')p.set('range',r);
+  if(s&&s!=='all')p.set('session',s);
+  return p;
+}
+
+async function resetData(){
+  if(!confirm('Wirklich ALLE Trades und den kompletten Equity-Verlauf unwiderruflich löschen?'))return;
+  await fetch('/api/reset',{method:'POST'});
+  loadAll();
+  if(typeof loadSymbols==='function'&&symbolsLoaded){symbolsLoaded=false;}
+}
+
+async function loadStats(){
+  const s=await getJSON('/api/stats?'+rangeParams());
+  const cards=[
+    ['Equity',fmt(s.equity),cls(s.return_pct)],
+    ['Rendite',fmt(s.return_pct)+' %',cls(s.return_pct)],
+    ['Realisierter PnL',fmt(s.total_pnl),cls(s.total_pnl)],
+    ['Gewinnrate',fmt(s.winrate)+' %',''],
+    ['Profit-Faktor',s.profit_factor==null?'–':fmt(s.profit_factor),''],
+    ['Trades (ges.)',s.total_trades,''],
+    ['Geschlossen',s.count,''],
+    ['Offen',s.open_count,''],
+    ['Ø Gewinn',fmt(s.avg_win),'pos'],
+    ['Ø Verlust',fmt(s.avg_loss),'neg'],
+    ['Bester',fmt(s.best),'pos'],
+    ['Schlechtester',fmt(s.worst),'neg'],
+  ];
+  document.getElementById('cards').innerHTML=cards.map(([l,v,c])=>
+    `<div class="card"><div class="label">${l}</div><div class="value ${c}">${v}</div></div>`).join('');
+}
+
+async function loadEquity(){
+  const e=await getJSON('/api/equity?'+rangeParams());
+  const labels=e.labels.map(t=>new Date(t).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}));
+  if(equityChart)equityChart.destroy();
+  equityChart=new Chart(document.getElementById('equityChart'),{
+    type:'line',
+    data:{labels,datasets:[{data:e.values,borderColor:'#58a6ff',backgroundColor:'#58a6ff22',fill:true,tension:.2,pointRadius:0,borderWidth:2}]},
+    options:{plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#8b949e',maxTicksLimit:10},grid:{color:'#21262d'}},y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'}}}}
+  });
+}
+
+function summaryTable(obj){
+  const rows=Object.entries(obj).filter(([k,v])=>v&&v.count!=null);
+  if(!rows.length)return '<p class="muted">Noch keine Daten.</p>';
+  return `<table><tr><th>Gruppe</th><th>Trades</th><th>Winrate</th><th>PnL</th><th>Profit-Faktor</th></tr>`+
+    rows.map(([k,v])=>`<tr><td>${k}</td><td>${v.count}</td><td>${fmt(v.winrate)} %</td><td class="${cls(v.total_pnl)}">${fmt(v.total_pnl)}</td><td>${v.profit_factor==null?'–':fmt(v.profit_factor)}</td></tr>`).join('')+`</table>`;
+}
+
+function barChart(canvasId,existing,data,labelKey){
+  const labels=data.map(d=>d[labelKey]);
+  const wr=data.map(d=>d.winrate);
+  const cnt=data.map(d=>d.count);
+  if(existing)existing.destroy();
+  return new Chart(document.getElementById(canvasId),{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'Winrate %',data:wr,backgroundColor:'#3fb950',yAxisID:'y'},
+      {label:'Trades',data:cnt,backgroundColor:'#58a6ff66',yAxisID:'y1',type:'bar'}
+    ]},
+    options:{plugins:{legend:{labels:{color:'#e6edf3'}}},scales:{
+      x:{ticks:{color:'#8b949e'},grid:{color:'#21262d'}},
+      y:{position:'left',ticks:{color:'#8b949e'},grid:{color:'#21262d'},title:{display:true,text:'Winrate %',color:'#8b949e'}},
+      y1:{position:'right',ticks:{color:'#8b949e'},grid:{display:false},title:{display:true,text:'Trades',color:'#8b949e'}}
+    }}
+  });
+}
+
+async function loadAnalysis(){
+  const a=await getJSON('/api/analysis?'+rangeParams());
+  document.getElementById('bySide').innerHTML=summaryTable(a.by_side);
+  document.getElementById('byReason').innerHTML=summaryTable(a.by_reason);
+  rsiChart=barChart('rsiChart',rsiChart,a.by_rsi,'bucket');
+  scoreChart=barChart('scoreChart',scoreChart,a.by_score,'bucket');
+  hourChart=barChart('hourChart',hourChart,a.by_hour||[],'bucket');
+  // nach Strategie
+  const bs=a.by_strategy||[];
+  if(bs.length){
+    document.getElementById('byStrategy').innerHTML=`<table><tr><th>Strategie</th><th>Trades</th><th>Winrate</th><th>PnL</th><th>Ø PnL</th><th>Profit-Faktor</th></tr>`+
+      bs.map(v=>`<tr><td>${v.strategy}</td><td>${v.count}</td><td>${fmt(v.winrate)} %</td><td class="${cls(v.total_pnl)}">${fmt(v.total_pnl)}</td><td class="${cls(v.avg_pnl)}">${fmt(v.avg_pnl)}</td><td>${v.profit_factor==null?'–':fmt(v.profit_factor)}</td></tr>`).join('')+`</table>`;
+  }else document.getElementById('byStrategy').innerHTML='<p class="muted">Noch keine geschlossenen Trades im gewählten Zeitraum.</p>';
+  // Top-Coins
+  if(a.by_symbol.length){
+    document.getElementById('bySymbol').innerHTML=`<table><tr><th>Coin</th><th>Trades</th><th>Winrate</th><th>PnL</th><th>Profit-Faktor</th></tr>`+
+      a.by_symbol.map(v=>`<tr><td>${v.symbol}</td><td>${v.count}</td><td>${fmt(v.winrate)} %</td><td class="${cls(v.total_pnl)}">${fmt(v.total_pnl)}</td><td>${v.profit_factor==null?'–':fmt(v.profit_factor)}</td></tr>`).join('')+`</table>`;
+  }else document.getElementById('bySymbol').innerHTML='<p class="muted">Noch keine geschlossenen Trades.</p>';
+}
+
+async function loadOpen(){
+  const o=await getJSON('/api/open');
+  if(!o.length){document.getElementById('openTable').innerHTML='<p class="muted">Keine offenen Positionen.</p>';return;}
+  document.getElementById('openTable').innerHTML=`<table><tr><th>Coin</th><th>Richtung</th><th>Einstieg</th><th>Menge</th><th>SL</th><th>TP</th><th>Score</th><th>seit</th></tr>`+
+    o.map(t=>`<tr><td><span class="clickable" onclick="openChartFor('${t.symbol}')">${t.symbol}</span></td><td><span class="tag ${t.side}">${t.side.toUpperCase()}</span></td><td>${fmt(t.entry_price,6)}</td><td>${fmt(t.qty,4)}</td><td>${fmt(t.stop_loss,6)}</td><td>${fmt(t.take_profit,6)}</td><td>${fmt(t.entry_score,1)}</td><td class="muted">${new Date(t.entry_time).toLocaleString('de-DE')}</td></tr>`).join('')+`</table>`;
+}
+
+const fmtDT=s=>s?new Date(s).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'–';
+
+async function loadTrades(){
+  const p=rangeParams();
+  const side=fSide.value,reason=fReason.value,result=fResult.value;
+  if(side)p.set('side',side);if(reason)p.set('reason',reason);if(result)p.set('result',result);
+  const t=await getJSON('/api/trades?'+p.toString());
+  if(!t.length){document.getElementById('tradesTable').innerHTML='<p class="muted">Keine Trades für diesen Filter.</p>';return;}
+  document.getElementById('tradesTable').innerHTML=`<table><tr><th>#</th><th>Coin</th><th>Richtung</th><th>Einstiegszeit</th><th>Einstiegskurs</th><th>Ausstiegszeit</th><th>Ausstiegskurs</th><th>Exit-Grund</th><th>PnL</th><th>%</th><th>Score</th><th>Halten</th><th>Signale</th></tr>`+
+    t.map(x=>`<tr>
+      <td>${x.id}</td><td><span class="clickable" onclick="openChartFor('${x.symbol}')">${x.symbol}</span></td>
+      <td><span class="tag ${x.side}">${x.side.toUpperCase()}</span></td>
+      <td class="muted">${fmtDT(x.entry_time)}</td><td>${fmt(x.entry_price,6)}</td>
+      <td class="muted">${fmtDT(x.exit_time)}</td><td>${fmt(x.exit_price,6)}</td>
+      <td>${x.exit_reason}</td>
+      <td class="${cls(x.pnl)}">${fmt(x.pnl)}</td>
+      <td class="${cls(x.pnl_pct)}">${fmt(x.pnl_pct)}</td>
+      <td>${fmt(x.entry_score,1)}</td>
+      <td class="muted">${fmt(x.hold_minutes,0)}m</td>
+      <td><details><summary>${(x.entry_reasons||[]).length}</summary><div class="muted">${(x.entry_reasons||[]).join('<br>')}</div></details></td>
+    </tr>`).join('')+`</table>`;
+}
+
+async function loadAll(){await Promise.all([loadStats(),loadEquity(),loadAnalysis(),loadOpen(),loadTrades()]);}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+let symbolsLoaded=false;
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.hidden=(t.id!=='tab-'+name));
+  document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tabbtn-'+name).classList.add('active');
+  if(name==='charts'&&!symbolsLoaded){loadSymbols();}
+}
+
+function openChartFor(symbol){
+  showTab('charts');
+  const sel=document.getElementById('chSymbol');
+  const ensure=()=>{ if([...sel.options].some(o=>o.value===symbol)){sel.value=symbol;loadChart();} };
+  if(symbolsLoaded){ensure();}
+  else{loadSymbols().then(ensure);}
+}
+
+// ---------------------------------------------------------------------------
+// Chart-Tab
+// ---------------------------------------------------------------------------
+let priceChart;
+
+async function loadSymbols(){
+  const data=await getJSON('/api/symbols');
+  const sel=document.getElementById('chSymbol');
+  if(!data.length){sel.innerHTML='<option value="">Noch keine Trades</option>';symbolsLoaded=true;return;}
+  sel.innerHTML=data.map(d=>`<option value="${d.symbol}">${d.symbol} (${d.total} Trades${d.open?', '+d.open+' offen':''})</option>`).join('');
+  symbolsLoaded=true;
+  if(!priceChart)loadChart();
+}
+
+function tradeTooltip(t){
+  const dir=t.side.toUpperCase();
+  if(t.status==='open'){
+    return [`OFFEN · ${dir}`,`Entry ${fmt(t.entry_price,6)}`,`SL ${fmt(t.stop_loss,6)} · TP ${fmt(t.take_profit,6)}`,`Menge ${fmt(t.qty,4)} · Score ${fmt(t.entry_score,1)}`];
+  }
+  return [`#${t.id} · ${dir} · ${t.exit_reason||''}`,`Entry ${fmt(t.entry_price,6)} → Exit ${fmt(t.exit_price,6)}`,`SL ${fmt(t.stop_loss,6)} · TP ${fmt(t.take_profit,6)}`,`PnL ${fmt(t.pnl)} (${fmt(t.pnl_pct)} %)`];
+}
+
+async function loadChart(){
+  const symbol=document.getElementById('chSymbol').value;
+  const interval=document.getElementById('chInterval').value;
+  const limit=document.getElementById('chLimit').value;
+  const status=document.getElementById('chStatus');
+  if(!symbol){status.textContent='Kein Coin ausgewählt.';return;}
+  document.getElementById('chSymbolLabel').textContent=symbol;
+  status.textContent='Lade…';
+  let d;
+  try{ d=await getJSON(`/api/chart?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`); }
+  catch(e){ status.textContent='Fehler beim Laden.'; return; }
+  if(d.error){ status.textContent='Fehler: '+d.error; return; }
+  if(!d.candles.length){ status.textContent='Keine Kursdaten erhalten.'; return; }
+
+  const closeLine=d.candles.map(c=>({x:c.x,y:c.c}));
+  const hiLine=d.candles.map(c=>({x:c.x,y:c.h}));
+  const loLine=d.candles.map(c=>({x:c.x,y:c.l}));
+  const nowMs=Date.now();
+  const firstX=d.candles[0].x;
+
+  // Trade-Overlays aufbauen
+  const entryLong=[],entryShort=[],entryOpen=[],exitPts=[];
+  const stopLine=[],tpLine=[],connLine=[];
+  for(const t of d.trades){
+    const eX=Date.parse(t.entry_time);
+    const xX=t.exit_time?Date.parse(t.exit_time):nowMs;
+    // außerhalb des sichtbaren Fensters? Entry zumindest am Rand andocken
+    const tip=tradeTooltip(t);
+    const entryPt={x:eX,y:t.entry_price,_tip:tip};
+    if(t.status==='open') entryOpen.push(entryPt);
+    else if(t.side==='long') entryLong.push(entryPt);
+    else entryShort.push(entryPt);
+    if(t.status==='closed' && t.exit_price!=null)
+      exitPts.push({x:xX,y:t.exit_price,_tip:tip,_win:(t.pnl||0)>0});
+    if(t.stop_loss!=null){ stopLine.push({x:eX,y:t.stop_loss},{x:xX,y:t.stop_loss},{x:xX,y:NaN}); }
+    if(t.take_profit!=null){ tpLine.push({x:eX,y:t.take_profit},{x:xX,y:t.take_profit},{x:xX,y:NaN}); }
+    connLine.push({x:eX,y:t.entry_price},{x:xX,y:t.exit_price!=null?t.exit_price:t.entry_price},{x:xX,y:NaN});
+  }
+
+  const datasets=[
+    {label:'Hoch/Tief',type:'line',data:hiLine,borderColor:'transparent',backgroundColor:'#58a6ff14',pointRadius:0,fill:'+1',order:12},
+    {label:'_lo',type:'line',data:loLine,borderColor:'transparent',pointRadius:0,fill:false,order:12},
+    {label:'Kurs',type:'line',data:closeLine,borderColor:'#58a6ff',backgroundColor:'#58a6ff',borderWidth:1.5,pointRadius:0,tension:.15,order:10},
+    {label:'Stop-Loss',type:'line',data:stopLine,borderColor:'#f85149',borderWidth:1.5,borderDash:[5,4],pointRadius:0,spanGaps:false,order:5},
+    {label:'Take-Profit',type:'line',data:tpLine,borderColor:'#3fb950',borderWidth:1.5,borderDash:[5,4],pointRadius:0,spanGaps:false,order:5},
+    {label:'Entry→Exit',type:'line',data:connLine,borderColor:'#8b949e',borderWidth:1,pointRadius:0,spanGaps:false,order:4},
+    {label:'Long-Einstieg',type:'scatter',data:entryLong,backgroundColor:'#3fb950',borderColor:'#fff',borderWidth:1,pointStyle:'triangle',radius:8,order:1},
+    {label:'Short-Einstieg',type:'scatter',data:entryShort,backgroundColor:'#f85149',borderColor:'#fff',borderWidth:1,pointStyle:'triangle',rotation:180,radius:8,order:1},
+    {label:'Offene Position',type:'scatter',data:entryOpen,backgroundColor:'#58a6ff',borderColor:'#fff',borderWidth:2,pointStyle:'rectRot',radius:9,order:1},
+    {label:'Ausstieg',type:'scatter',data:exitPts,
+     backgroundColor:exitPts.map(p=>p._win?'#3fb95099':'#f8514999'),borderColor:'#e6edf3',borderWidth:1,pointStyle:'rect',radius:6,order:2},
+  ];
+
+  const prev=Chart.getChart('priceChart'); if(prev)prev.destroy();
+  priceChart=new Chart(document.getElementById('priceChart'),{
+    type:'line',
+    data:{datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,animation:false,
+      interaction:{mode:'nearest',intersect:true},
+      plugins:{
+        legend:{labels:{color:'#e6edf3',usePointStyle:true,filter:i=>!['_lo','Hoch/Tief','Stop-Loss','Take-Profit','Entry→Exit'].includes(i.text)}},
+        tooltip:{filter:(ctx)=>!['_lo','Hoch/Tief'].includes(ctx.dataset.label),callbacks:{label:(ctx)=>{
+          const r=ctx.raw;
+          if(r&&r._tip)return r._tip;
+          if(ctx.dataset.label==='Kurs')return `Kurs ${fmt(r.y,6)}`;
+          return ctx.dataset.label;
+        }}}
+      },
+      scales:{
+        x:{type:'time',time:{tooltipFormat:'dd.MM.yy HH:mm'},ticks:{color:'#8b949e',maxTicksLimit:12},grid:{color:'#21262d'}},
+        y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'}}
+      }
+    }
+  });
+
+  // Offene-Positionen-Tabelle für diesen Coin
+  const open=d.trades.filter(t=>t.status==='open');
+  const tbl=document.getElementById('chOpenTable');
+  if(!open.length){tbl.innerHTML='<p class="muted">Keine offene Position für diesen Coin.</p>';}
+  else{tbl.innerHTML=`<table><tr><th>Richtung</th><th>Einstieg</th><th>Menge</th><th>SL</th><th>TP</th><th>Score</th><th>seit</th></tr>`+
+    open.map(t=>`<tr><td><span class="tag ${t.side}">${t.side.toUpperCase()}</span></td><td>${fmt(t.entry_price,6)}</td><td>${fmt(t.qty,4)}</td><td>${fmt(t.stop_loss,6)}</td><td>${fmt(t.take_profit,6)}</td><td>${fmt(t.entry_score,1)}</td><td class="muted">${new Date(t.entry_time).toLocaleString('de-DE')}</td></tr>`).join('')+`</table>`;}
+
+  const shown=d.trades.filter(t=>Date.parse(t.entry_time)>=firstX).length;
+  status.textContent=`${d.candles.length} Candles · ${d.trades.length} Trades (${shown} im Fenster)`;
+}
+
+loadAll();
+setInterval(loadAll,60000); // alle 60s automatisch aktualisieren
+</script>
+</body>
+</html>

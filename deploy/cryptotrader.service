@@ -1,0 +1,23 @@
+[Unit]
+Description=CryptoTrader (Paper) - Bot + Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__APP_DIR__
+# Dashboard nach aussen oeffnen:
+Environment=CT_HOST=0.0.0.0
+# WICHTIG bei oeffentlichem Hosting: Dashboard-Passwort setzen (sonst kann
+# jeder den Reset-Button ausloesen). Zeile einkommentieren und anpassen:
+# Environment=CT_DASHBOARD_PASSWORD=BitteAendern
+# Weitere optionale Overrides, z.B.:
+# Environment=CT_START_CAPITAL=500
+# Environment=CT_SCAN_INTERVAL_SECONDS=120
+ExecStart=__APP_DIR__/.venv/bin/python run_all.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

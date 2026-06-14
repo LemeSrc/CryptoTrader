@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "C:\\Users\\lenny\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "runtimeArgs": ["dashboard.py"],
+      "port": 5000
+    }
+  ]
+}

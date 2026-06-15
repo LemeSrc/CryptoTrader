@@ -12,6 +12,17 @@ APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_USER="$(whoami)"
 echo ">> App-Verzeichnis: $APP_DIR (User: $RUN_USER)"
 
+# --- Swap anlegen: wichtig auf der 1-GB-VM (E2.1.Micro) gegen Out-of-Memory ---
+TOTAL_MB="$(free -m | awk '/^Mem:/{print $2}')"
+if [ ! -f /swapfile ] && [ "${TOTAL_MB:-9999}" -lt 1500 ]; then
+    echo ">> Wenig RAM (${TOTAL_MB} MB) erkannt -> 2 GB Swap anlegen ..."
+    sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+fi
+
 echo ">> Pakete installieren ..."
 sudo apt-get update -y
 sudo apt-get install -y python3-venv python3-pip

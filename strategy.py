@@ -125,6 +125,23 @@ def _evaluate_timeframe(df, tf):
     if bool(cur["pat_shooting_star"]):
         c("short", "Reversal", 0.7, "Shooting-Star-Kerze")
 
+    # === Market Fluctuation: wie stark wird ein Preis abgelehnt? (Docht/Lunte) ===
+    # Lange untere Lunte = der Markt lehnt tiefere Preise ab (Käufer drücken hoch)
+    #   -> long. Lange obere Lunte = Ablehnung höherer Preise -> short. In stark
+    # oszillierenden (choppy) Phasen wird das Signal verstärkt. Durch das 4h-Trend-
+    # Gate werden daraus automatisch Pullback-Einstiege MIT dem Trend.
+    lwr = float(cur["lower_wick_ratio"])
+    uwr = float(cur["upper_wick_ratio"])
+    chop_boost = 1.3 if float(cur["chop"]) > 55 else 1.0
+    near_low = price <= cur["bb_lower"] or _near(price, cur["bb_lower"], atr_val, 0.6)
+    near_high = price >= cur["bb_upper"] or _near(price, cur["bb_upper"], atr_val, 0.6)
+    if lwr >= 0.5 and (near_low or cur["rsi"] < 45):
+        c("long", "Market Fluctuation", 0.9 * chop_boost,
+          f"Ablehnung tiefer Preise (Lunte {lwr*100:.0f}%)")
+    if uwr >= 0.5 and (near_high or cur["rsi"] > 55):
+        c("short", "Market Fluctuation", 0.9 * chop_boost,
+          f"Ablehnung hoher Preise (Docht {uwr*100:.0f}%)")
+
     # === VWAP: Lage + Re-Cross ===
     if cur["vwap"] == cur["vwap"]:
         c("long" if price > cur["vwap"] else "short", "VWAP", 0.4,
@@ -248,6 +265,7 @@ def _snapshot_row(row):
         "close", "volume", "vol_sma20", "vol_z",
         "roc", "vwap", "obv", "taker_buy_ratio",
         "donch_high", "donch_low", "kc_upper", "kc_lower",
+        "chop", "upper_wick_ratio", "lower_wick_ratio",
         "ha_bull", "tenkan", "kijun", "cloud_top", "cloud_bottom",
         "pat_bull_engulf", "pat_bear_engulf", "pat_hammer",
         "pat_shooting_star", "pat_doji", "pat_inside_bar",
@@ -314,6 +332,9 @@ def analyze(symbol, klines_by_tf):
     entry_adx = None
     if config.ADX_FILTER_TF in enriched:
         entry_adx = float(enriched[config.ADX_FILTER_TF].iloc[-2]["adx"])
+    entry_bb_width = None
+    if config.BB_WIDTH_FILTER_TF in enriched:
+        entry_bb_width = float(enriched[config.BB_WIDTH_FILTER_TF].iloc[-2]["bb_width"])
 
     # Richtung bestimmen
     if long_total >= short_total:
@@ -355,6 +376,7 @@ def analyze(symbol, klines_by_tf):
         "primary_timeframe": config.PRIMARY_TIMEFRAME,
         "trend_up": trend_up,
         "entry_adx": round(entry_adx, 2) if entry_adx is not None else None,
+        "entry_bb_width": round(entry_bb_width, 5) if entry_bb_width is not None else None,
         "trend_aligned": trend_aligned,
     }
 
@@ -377,5 +399,10 @@ def signal_is_valid(analysis):
     if config.MIN_ENTRY_ADX:
         adx_val = analysis.get("entry_adx")
         if adx_val is not None and adx_val < config.MIN_ENTRY_ADX:
+            return False
+    # Marktfluktuations-Filter: toten Seitwärts-Chop (zu enge Bänder) aussperren
+    if config.MIN_BB_WIDTH:
+        bbw = analysis.get("entry_bb_width")
+        if bbw is not None and bbw < config.MIN_BB_WIDTH:
             return False
     return True

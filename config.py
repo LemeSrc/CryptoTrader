@@ -11,7 +11,7 @@ erhöht / verfeinert werden.
 # Markt / Coins
 # ---------------------------------------------------------------------------
 QUOTE_ASSET = "USDT"          # Es werden nur Paare gegen diese Währung gehandelt
-TOP_N_SYMBOLS = 120           # Anzahl der überwachten Coins (nach 24h-Volumen)
+TOP_N_SYMBOLS = 60            # Fokus auf die liquidesten Coins (engerer Spread, weniger Müll-Trades)
 SYMBOL_REFRESH_MINUTES = 360  # Wie oft die Top-Coin-Liste neu geladen wird
 # Coins, die immer ausgeschlossen werden (z.B. Stablecoin-Paare)
 SYMBOL_BLACKLIST = {
@@ -59,22 +59,24 @@ SPREAD_PCT = 0.05
 # ---------------------------------------------------------------------------
 # Ein-/Ausstiegs-Logik
 # ---------------------------------------------------------------------------
-# Score-Schwelle für einen Einstieg. Viele benannte Strategien liefern je nach
-# Zeitrahmen & Gewicht Punkte; der Gesamt-Score liegt dadurch höher als früher.
-# Niedriger Wert => mehr Trades (bewusst moderat zum Datensammeln, tunebar).
-ENTRY_SCORE_THRESHOLD = 6.0
+# Score-Schwelle für einen Einstieg. DEUTLICH angehoben: nur noch wenige,
+# hochwertige Setups statt vieler Müll-Trades (Kosten fressen sonst alles).
+ENTRY_SCORE_THRESHOLD = 20.0
 ALLOW_LONG = True
 ALLOW_SHORT = True
 
-# --- Einstiegs-Filter (datengetrieben aus der Trade-Historie hergeleitet) ---
-# Auswertung von ~900 geschlossenen Trades zeigte klar:
-#  * Trades MIT dem höheren Trend (4h) liefern PF ~1.15, GEGEN den Trend PF ~0.9.
-#  * In trendlosen Phasen (niedriger ADX) verlieren Einstiege deutlich.
-# Daher nur noch mit dem 4h-Trend und nur bei ausreichender Trendstärke handeln.
+# --- Einstiegs-Filter (datengetrieben, verschärft) -------------------------
+# Live-Auswertung (~930 Trades) zeigte: der Bot verlor v.a. durch (a) Übertraden
+# (Gebühren!), (b) zu enge Stops und (c) toten Seitwärts-Chop. Diese Gates lassen
+# nur noch klare Setups durch:
 REQUIRE_TREND_ALIGNMENT = True   # Long nur im 4h-Aufwärtstrend, Short nur im Abwärtstrend
 TREND_FILTER_TF = "4h"           # Zeitrahmen für die Trendrichtung (EMA50 vs EMA200)
-MIN_ENTRY_ADX = 20.0             # Mindest-Trendstärke (ADX) auf dem Filter-Zeitrahmen
+MIN_ENTRY_ADX = 22.0             # Mindest-Trendstärke (ADX) auf dem Filter-Zeitrahmen
 ADX_FILTER_TF = "15m"            # Zeitrahmen für die ADX-Prüfung
+# Marktfluktuations-Filter: Mindest-Bandbreite (Bollinger) auf dem Haupt-Zeitrahmen.
+# Blockt den toten "Hoch-runter-Chop" in engen Ranges (dort WR nur ~8-28 %).
+MIN_BB_WIDTH = 0.022             # (bb_upper-bb_lower)/bb_mid; ~2,2 % Mindest-Bandbreite
+BB_WIDTH_FILTER_TF = "15m"
 
 # ---------------------------------------------------------------------------
 # Strategie-Gewichte (Scoring)
@@ -84,47 +86,52 @@ ADX_FILTER_TF = "15m"            # Zeitrahmen für die ADX-Prüfung
 # verstärken (>1), abschwächen (<1) oder ganz abschalten (0), ohne Code zu
 # ändern. Die beitragenden Strategien werden pro Trade gespeichert und sind im
 # Dashboard auswertbar ("welche Strategie funktioniert wann am besten").
-# Gewichte aus der Trade-Historie kalibriert (PF = Profit-Faktor je Strategie):
-#   stark profitabel -> hoch, dauerhaft verlustreich -> runter.
+# Gewichte BEWUSST neutralisiert: Einzelstrategie-Performance kippte zwischen den
+# Samples (z.B. Breakout mal bester, mal schlechtester) -> Overfitting-Falle. Die
+# Profitabilität kommt jetzt aus den robusten FILTERN (Trend, ADX, Bandbreite,
+# weite Stops, wenig Trades), nicht aus fein getunten Gewichten. Nur die neue
+# Marktfluktuations-Strategie und die mehrtägigen Chart-Pattern werden betont,
+# der schwächste Proxy abgeschaltet.
 STRATEGY_WEIGHTS = {
-    "Breakout":             1.6,   # bester Ausreißer (PF ~1.25) -> hochgewichtet
-    "Chart Patterns":       1.8,   # mehrtägige/-wöchige Formationen (PF ~1.20)
-    "Reversal":             1.4,   # Stochastik-/Pattern-Umkehr (PF ~1.35)
-    "Catalyst (approx)":    1.1,   # Volumen-/Volatilitäts-Spike (PF ~1.20)
-    "Opening Range":        1.1,   # Tages-Opening-Range-Breakout (PF ~1.11)
-    "Price Action":         1.1,   # Engulfing/Hammer/Inside-Bar
-    "Order Flow (approx)":  1.0,   # Taker-Buy-Volumen (Proxy, PF ~1.07)
-    "Heikin Ashi":          1.0,   # geglätteter HA-Trend
-    "Trend Following":      1.0,   # EMA-Stapel / ADX-Richtung (jetzt per Gate erzwungen)
-    "Moving Average Cross": 1.0,   # EMA9/EMA21- und MACD-Kreuze
-    "Momentum":             1.0,   # ROC / MACD-Histogramm
-    "Ichimoku":             1.0,   # Wolke + Tenkan/Kijun
-    "VWAP":                 1.0,   # Lage zum VWAP + Re-Cross
-    "Volume Profile":       0.8,   # Lage zum POC
-    "Pivot Points":         0.8,   # Lage zu Pivot/R/S
-    "Sentiment (approx)":   0.5,   # Kaufdruck-Trend (Proxy, kein News-Feed)
-    "Mean Reversion":       0.5,   # RSI-Extreme verloren in den Daten -> abgewertet
-    "Bollinger Squeeze":    0.5,   # PF ~0.75 -> abgewertet
-    "Fibonacci":            0.4,   # PF ~0.75 -> abgewertet
-    "MACD Divergence":      0.4,   # PF ~0.76 -> stark abgewertet (war zuvor am höchsten!)
-    "Squeeze Play (approx)":0.3,   # PF ~0.42 -> Proxy, kaum tragfähig
-    "Range":                0.3,   # PF ~0.24 -> schlechteste Strategie
+    "Market Fluctuation":   1.4,   # NEU: Wick-Ablehnung an Extremen (dein Fokus)
+    "Chart Patterns":       1.3,   # mehrtägige/-wöchige Formationen (robustes Konzept)
+    "Reversal":             1.0,
+    "Breakout":             1.0,
+    "Trend Following":      1.0,
+    "Moving Average Cross": 1.0,
+    "Momentum":             1.0,
+    "Ichimoku":             1.0,
+    "VWAP":                 1.0,
+    "Price Action":         1.0,
+    "Heikin Ashi":          1.0,
+    "Catalyst (approx)":    1.0,
+    "Opening Range":        0.8,   # feuerte sehr oft & verlor in Summe am meisten
+    "Order Flow (approx)":  0.8,
+    "Volume Profile":       0.8,
+    "Pivot Points":         0.8,
+    "Mean Reversion":       0.8,
+    "Fibonacci":            0.8,
+    "MACD Divergence":      0.8,
+    "Bollinger Squeeze":    0.6,
+    "Range":                0.6,
+    "Sentiment (approx)":   0.5,   # schwacher Proxy
+    "Squeeze Play (approx)":0.0,   # in beiden Samples schlecht -> abgeschaltet
 }
 
 # Stop-Loss / Take-Profit auf Basis der ATR (Volatilität) des Haupt-Zeitrahmens
 ATR_PERIOD = 14
-SL_ATR_MULTIPLIER = 1.5       # Stop-Loss-Abstand = 1.5 * ATR
-TP_ATR_MULTIPLIER = 2.5       # Take-Profit-Abstand = 2.5 * ATR (Chance/Risiko ~1.67)
+# Stops bewusst WEITER (vorher 1.5 ATR -> 53 % wurden vom Rauschen ausgestoppt;
+# Trades, die >60 min überlebten, hatten WR 35-56 %). Größeres TP für besseres R:R.
+SL_ATR_MULTIPLIER = 2.0       # Stop-Loss-Abstand = 2.0 * ATR
+TP_ATR_MULTIPLIER = 4.0       # Take-Profit-Abstand = 4.0 * ATR (Chance/Risiko = 2.0)
 MAX_HOLD_HOURS = 48           # Position spätestens nach X Stunden schließen
-EXIT_ON_OPPOSITE_SIGNAL = True  # Bei klarem Gegensignal vorzeitig schließen
+# Gegensignal-Exits churnten Verluste (PF 0.15) -> aus. SL/TP/Timeout managen den Exit.
+EXIT_ON_OPPOSITE_SIGNAL = False
 
 # --- Anti-Churn (verhindert viele winzige Trades je Coin) ---
-# Nach dem Schließen einer Position bleibt der Coin für diese Dauer gesperrt,
-# damit nicht sofort (oft in dieselbe Verlustrichtung) neu eingestiegen wird.
-REENTRY_COOLDOWN_MINUTES = 90
-# Erst nach dieser Mindesthaltedauer darf ein Gegensignal einen vorzeitigen
-# Ausstieg auslösen -> kein Flip-Flop im 1-Candle-Takt. SL/TP greifen immer.
-MIN_HOLD_MINUTES = 45
+# Deutlich verlängert: Übertraden war der größte Verlustbringer (Gebühren).
+REENTRY_COOLDOWN_MINUTES = 240   # Coin nach Close 4 h gesperrt
+MIN_HOLD_MINUTES = 60            # frühester vorzeitiger Exit (falls Gegensignal aktiviert)
 
 # ---------------------------------------------------------------------------
 # Pfade
@@ -166,9 +173,15 @@ SCAN_INTERVAL_SECONDS = _ovr("SCAN_INTERVAL_SECONDS", int, SCAN_INTERVAL_SECONDS
 ENTRY_SCORE_THRESHOLD = _ovr("ENTRY_SCORE_THRESHOLD", float, ENTRY_SCORE_THRESHOLD)
 TOP_N_SYMBOLS = _ovr("TOP_N_SYMBOLS", int, TOP_N_SYMBOLS)
 SPREAD_PCT = _ovr("SPREAD_PCT", float, SPREAD_PCT)
+MIN_ENTRY_ADX = _ovr("MIN_ENTRY_ADX", float, MIN_ENTRY_ADX)
+MIN_BB_WIDTH = _ovr("MIN_BB_WIDTH", float, MIN_BB_WIDTH)
+SL_ATR_MULTIPLIER = _ovr("SL_ATR_MULTIPLIER", float, SL_ATR_MULTIPLIER)
+TP_ATR_MULTIPLIER = _ovr("TP_ATR_MULTIPLIER", float, TP_ATR_MULTIPLIER)
+REENTRY_COOLDOWN_MINUTES = _ovr("REENTRY_COOLDOWN_MINUTES", int, REENTRY_COOLDOWN_MINUTES)
 ALLOW_LONG = _ovr_bool("ALLOW_LONG", ALLOW_LONG)
 ALLOW_SHORT = _ovr_bool("ALLOW_SHORT", ALLOW_SHORT)
 REQUIRE_TREND_ALIGNMENT = _ovr_bool("REQUIRE_TREND_ALIGNMENT", REQUIRE_TREND_ALIGNMENT)
+EXIT_ON_OPPOSITE_SIGNAL = _ovr_bool("EXIT_ON_OPPOSITE_SIGNAL", EXIT_ON_OPPOSITE_SIGNAL)
 
 # Hosting: Plattformen geben den Port via $PORT vor; Bind-Host via CT_HOST=0.0.0.0
 DASHBOARD_PORT = int(os.environ.get("PORT", DASHBOARD_PORT))

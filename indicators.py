@@ -141,6 +141,16 @@ def heikin_ashi(df):
     return ha_open, ha_close
 
 
+def choppiness(df, period=14):
+    """Choppiness-Index (0..100): misst, wie stark der Markt seitwärts oszilliert.
+    Hoch (>~60) = Chop/Range (Hoch-runter-Hoch-runter), niedrig (<~40) = Trend."""
+    tr = true_range(df)
+    atr_sum = tr.rolling(period).sum()
+    rng = (df["high"].rolling(period).max() - df["low"].rolling(period).min()).replace(0, np.nan)
+    chop = 100 * np.log10(atr_sum / rng) / np.log10(period)
+    return chop.clip(0, 100).fillna(50)
+
+
 def ichimoku(df, conv=9, base=26, span_b=52):
     """Ichimoku-Wolke. Liefert tenkan, kijun und die auf 'jetzt' projizierten
     Senkou-Span-A/B (also um `base` Perioden nach hinten verschoben), damit der
@@ -363,6 +373,14 @@ def compute_indicators(df, atr_period=14):
     df["kc_lower"] = kc_l
     df["bb_width"] = ((df["bb_upper"] - df["bb_lower"]) / df["bb_mid"].replace(0, np.nan)).fillna(0)
     df["bb_squeeze"] = ((df["bb_upper"] < df["kc_upper"]) & (df["bb_lower"] > df["kc_lower"])).fillna(False)
+
+    # --- Marktfluktuation: Choppiness + Docht-/Lunten-Ablehnung ---
+    df["chop"] = choppiness(df)
+    rng = (df["high"] - df["low"]).replace(0, np.nan)
+    upper_wick = df["high"] - df[["open", "close"]].max(axis=1)
+    lower_wick = df[["open", "close"]].min(axis=1) - df["low"]
+    df["upper_wick_ratio"] = (upper_wick / rng).fillna(0)   # Ablehnung hoher Preise
+    df["lower_wick_ratio"] = (lower_wick / rng).fillna(0)   # Ablehnung tiefer Preise
 
     # --- Heikin-Ashi-Trend ---
     ha_o, ha_c = heikin_ashi(df)

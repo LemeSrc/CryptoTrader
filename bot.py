@@ -73,21 +73,35 @@ def current_equity():
     return config.START_CAPITAL + db.realized_pnl()
 
 
-def position_size(equity, price, sl_distance):
-    """Stückzahl so, dass ein Stop-Treffer ~RISK_PER_TRADE_PCT des Equity kostet.
-    Das Notional wird auf den Hebel-Anteil je Position gedeckelt (Margin geteilt),
-    sodass die Summe aller offenen Positionen <= equity*LEVERAGE bleibt."""
-    if sl_distance <= 0 or price <= 0:
-        return 0.0, 0.0
-    risk_amount = equity * (config.RISK_PER_TRADE_PCT / 100.0)
-    qty = risk_amount / sl_distance
-    notional = qty * price
+def _round_trip_cost_frac():
+    """Geschätzte Round-Trip-Kosten als Bruchteil des Preises (Fee+Spread+Slippage)."""
+    return (2 * config.TAKER_FEE_PCT + config.SPREAD_PCT
+            + 2 * config.SLIPPAGE_PCT) / 100.0
+
+
+def position_size(equity, price, sl_distance, target_distance):
+    """Gewinnziel-basiertes Sizing: die Position wird so groß gewählt, dass das
+    Erreichen des Ziels netto ~MIN_PROFIT_USDT bringt — gedeckelt durch
+      * Margin (equity*LEVERAGE / Slots) und
+      * Risiko-Cap (Stop-Treffer <= RISK_PER_TRADE_PCT des Equity).
+    Gibt (qty, notional, expected_profit) zurück. Reicht das Notional nach den
+    Caps nicht für MIN_PROFIT, ist expected_profit < MIN_PROFIT -> Trade wird
+    vom Aufrufer verworfen (Min-Profit-Gate)."""
+    if sl_distance <= 0 or price <= 0 or target_distance <= 0:
+        return 0.0, 0.0, 0.0
+    net_move = target_distance / price - _round_trip_cost_frac()
+    if net_move <= 0:                       # Ziel deckt nicht mal die Kosten
+        return 0.0, 0.0, 0.0
+    # Notional, das am Ziel genau MIN_PROFIT_USDT (netto) bringt
+    profit_notional = config.MIN_PROFIT_USDT / net_move
+    # Caps
     slots = max(1, config.MAX_OPEN_POSITIONS)
-    max_notional = equity * config.LEVERAGE / slots
-    if notional > max_notional:
-        qty = max_notional / price
-        notional = qty * price
-    return qty, notional
+    margin_cap = equity * config.LEVERAGE / slots
+    risk_cap = (equity * config.RISK_PER_TRADE_PCT / 100.0) / (sl_distance / price)
+    notional = min(profit_notional, margin_cap, risk_cap)
+    qty = notional / price
+    expected_profit = notional * net_move
+    return qty, notional, expected_profit
 
 
 def _liquidation_price(entry, side):
@@ -157,8 +171,15 @@ def open_position(a):
         stop_loss = price + sl_distance
         take_profit = target if (target and target < price) else price - config.TP_ATR_MULT * atr
 
-    qty, notional = position_size(equity, price, sl_distance)
+    # Gewinnziel-basiertes Sizing + Min-Profit-Gate: nur Trades, die das Ziel
+    # mit netto >= MIN_PROFIT_USDT erreichen können (sonst zu nah / Caps zu klein).
+    target_distance = abs(take_profit - price)
+    qty, notional, expected_profit = position_size(equity, price, sl_distance, target_distance)
     if qty <= 0:
+        return None
+    if expected_profit < config.MIN_PROFIT_USDT * 0.95:
+        log.info("SKIP  %-12s %-5s | erwartet nur %.1f€ < %.0f€ (Ziel zu nah / Caps)",
+                 a["symbol"], side.upper(), expected_profit, config.MIN_PROFIT_USDT)
         return None
 
     entry_fee = notional * FEE_RATE
@@ -171,9 +192,9 @@ def open_position(a):
         leverage=config.LEVERAGE,
     )
     log.info(
-        "OPEN  #%s %-12s %-5s @ %.6g | score=%.1f rvol=%.1f flow=%.2f SL=%.6g TP=%.6g notional=%.2f",
+        "OPEN  #%s %-12s %-5s @ %.6g | score=%.1f rvol=%.1f notional=%.0f SL=%.6g TP=%.6g Ziel≈%.1f€",
         trade_id, a["symbol"], side.upper(), price, a["score"], a.get("rvol", 0),
-        a.get("flow_imbalance", 0), stop_loss, take_profit, notional,
+        notional, stop_loss, take_profit, expected_profit,
     )
     return trade_id
 

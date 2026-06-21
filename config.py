@@ -57,11 +57,19 @@ REQUEST_SLEEP_SECONDS = 0.06     # Pause zwischen API-Calls (höflich, aber züg
 # ---------------------------------------------------------------------------
 START_CAPITAL = 500.0            # virtuelles Startkapital (USDT ~ 500 €)
 LEVERAGE = 3.0                   # Perp-Hebel (500 € steuern bis 1.500 € Notional)
-RISK_PER_TRADE_PCT = 1.5         # max. Verlust am Schutz-Stop in % des Equity
-MAX_OPEN_POSITIONS = 2           # parallele Positionen (Margin wird geteilt)
+# Obergrenze für den Verlust am Schutz-Stop in % des Equity. Dient als Risiko-
+# CAP für das gewinnziel-basierte Sizing (s.u.) — verhindert Übergröße bei
+# weiten Stops.
+RISK_PER_TRADE_PCT = 3.0
+MAX_OPEN_POSITIONS = 1           # nur 1 Position -> volle Margin pro Trade (größere Trades)
 MAX_POSITIONS_PER_SYMBOL = 1
 # Wartungsmarge für die Liquidationspreis-Schätzung (Binance Low-Tier ~0,4-0,5 %)
 MAINTENANCE_MARGIN_PCT = 0.5
+
+# Mindest-Gewinn pro Trade (USDT). Die Positionsgröße wird so gewählt, dass das
+# Erreichen des Volume-Node-Ziels netto ~diesen Betrag bringt; Setups, deren Ziel
+# zu nah liegt, um das zu schaffen, werden übersprungen (-> wenige, große Trades).
+MIN_PROFIT_USDT = 20.0
 
 # ---------------------------------------------------------------------------
 # Echtgeld-Kostenmodell (voll auf jeden Trade angewandt)
@@ -158,6 +166,7 @@ USE_FUTURES = _ovr_bool("USE_FUTURES", USE_FUTURES)
 START_CAPITAL = _ovr("START_CAPITAL", float, START_CAPITAL)
 LEVERAGE = _ovr("LEVERAGE", float, LEVERAGE)
 RISK_PER_TRADE_PCT = _ovr("RISK_PER_TRADE_PCT", float, RISK_PER_TRADE_PCT)
+MIN_PROFIT_USDT = _ovr("MIN_PROFIT_USDT", float, MIN_PROFIT_USDT)
 MAX_OPEN_POSITIONS = _ovr("MAX_OPEN_POSITIONS", int, MAX_OPEN_POSITIONS)
 SCAN_INTERVAL_SECONDS = _ovr("SCAN_INTERVAL_SECONDS", int, SCAN_INTERVAL_SECONDS)
 BASE_UNIVERSE_N = _ovr("BASE_UNIVERSE_N", int, BASE_UNIVERSE_N)

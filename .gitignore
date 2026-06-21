@@ -17,6 +17,11 @@ data/
 _smoke*.py
 _analyze*.py
 
+# Secrets: SSH-Key zur Oracle-VM NIEMALS committen
+.ssh/
+*.key
+*.pem
+
 # OS / Editor
 .DS_Store
 .idea/

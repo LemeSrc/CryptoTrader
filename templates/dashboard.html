@@ -107,8 +107,8 @@
 
   <div class="grid two">
     <section>
-      <h2>Gewinnrate nach Einstiegs-RSI</h2>
-      <canvas id="rsiChart"></canvas>
+      <h2>Gewinnrate nach Einstiegs-RVOL <span class="muted">(relatives Volumen)</span></h2>
+      <canvas id="rvolChart"></canvas>
     </section>
     <section>
       <h2>Gewinnrate nach Einstiegs-Score</h2>
@@ -190,7 +190,7 @@
 <script>
 const fmt=(n,d=2)=>n==null?'–':Number(n).toLocaleString('de-DE',{minimumFractionDigits:d,maximumFractionDigits:d});
 const cls=n=>n>0?'pos':(n<0?'neg':'');
-let equityChart,rsiChart,scoreChart,hourChart;
+let equityChart,rvolChart,scoreChart,hourChart;
 
 async function getJSON(u){const r=await fetch(u);return r.json();}
 
@@ -272,7 +272,7 @@ async function loadAnalysis(){
   const a=await getJSON('/api/analysis?'+rangeParams());
   document.getElementById('bySide').innerHTML=summaryTable(a.by_side);
   document.getElementById('byReason').innerHTML=summaryTable(a.by_reason);
-  rsiChart=barChart('rsiChart',rsiChart,a.by_rsi,'bucket');
+  rvolChart=barChart('rvolChart',rvolChart,a.by_rvol,'bucket');
   scoreChart=barChart('scoreChart',scoreChart,a.by_score,'bucket');
   hourChart=barChart('hourChart',hourChart,a.by_hour||[],'bucket');
   // nach Strategie

@@ -12,9 +12,26 @@ Environment=CT_HOST=0.0.0.0
 # WICHTIG bei oeffentlichem Hosting: Dashboard-Passwort setzen (sonst kann
 # jeder den Reset-Button ausloesen). Zeile einkommentieren und anpassen:
 # Environment=CT_DASHBOARD_PASSWORD=BitteAendern
-# Weitere optionale Overrides, z.B.:
+#
+# --- Volume-/Order-Flow-Bot: optionale Overrides (ohne Code-Deploy tunen) ---
 # Environment=CT_START_CAPITAL=500
-# Environment=CT_SCAN_INTERVAL_SECONDS=120
+# Environment=CT_LEVERAGE=3                 # Perp-Hebel
+# Environment=CT_USE_FUTURES=1              # 0 = Spot-Fallback (kein Funding/Short)
+# Environment=CT_SCAN_INTERVAL_SECONDS=20   # Scan-Takt der Hot-List
+# Environment=CT_HOT_LIST_N=12              # Anzahl aktiv gescannter Coins
+# --- Selektivitaet (weniger/mehr Trades) ---
+# Environment=CT_MIN_RVOL=1.8               # niedriger = mehr Trades
+# Environment=CT_ENTRY_SCORE_THRESHOLD=2.5
+# Environment=CT_MIN_TAKER_IMBALANCE=0.06
+# Environment=CT_MIN_EDGE_COST_RATIO=1.5
+# --- Echtgeld-Kostenmodell ---
+# Environment=CT_TAKER_FEE_PCT=0.04
+# Environment=CT_SPREAD_PCT=0.03
+# Environment=CT_SLIPPAGE_PCT=0.02
+# Environment=CT_FUNDING_RATE_DEFAULT_PCT_PER_8H=0.01
+# --- Exits ---
+# Environment=CT_MAX_HOLD_MINUTES=90
+# Environment=CT_REENTRY_COOLDOWN_MINUTES=30
 ExecStart=__APP_DIR__/.venv/bin/python run_all.py
 Restart=always
 RestartSec=10

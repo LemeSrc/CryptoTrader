@@ -52,10 +52,12 @@ def init_db():
             strategies      TEXT,                       -- JSON: beitragende Strategien [{name, points}]
             entry_hour      INTEGER,                     -- Stunde (0-23, lokale Zeit) des Einstiegs
             entry_weekday   INTEGER,                     -- Wochentag (0=Mo .. 6=So, lokale Zeit)
+            leverage        REAL,                        -- simulierter Perp-Hebel
             exit_time       TEXT,
             exit_price      REAL,
-            exit_reason     TEXT,                        -- 'take_profit'|'stop_loss'|'opposite'|'timeout'
-            fees            REAL DEFAULT 0,
+            exit_reason     TEXT,                        -- 'take_profit'|'stop_loss'|'flow_flip'|'timeout'|'liquidation'
+            fees            REAL DEFAULT 0,              -- Taker-Fees (Entry+Exit); Spread/Slippage stecken im Fill-Preis
+            funding         REAL DEFAULT 0,             -- Funding-Kosten (signiert; Long zahlt bei positiver Rate)
             pnl             REAL,
             pnl_pct         REAL,
             hold_minutes    REAL
@@ -85,6 +87,10 @@ def _migrate(c):
         c.execute("ALTER TABLE trades ADD COLUMN entry_weekday INTEGER")
     if "strategies" not in cols:
         c.execute("ALTER TABLE trades ADD COLUMN strategies TEXT")
+    if "leverage" not in cols:
+        c.execute("ALTER TABLE trades ADD COLUMN leverage REAL")
+    if "funding" not in cols:
+        c.execute("ALTER TABLE trades ADD COLUMN funding REAL DEFAULT 0")
     # Für Alt-Trades die Tageszeit aus entry_time (UTC) in lokale Zeit ableiten
     todo = c.execute(
         "SELECT id, entry_time FROM trades WHERE entry_hour IS NULL"
@@ -112,23 +118,23 @@ def _local_time_parts():
 
 def open_trade(symbol, side, entry_price, qty, stop_loss, take_profit,
                entry_score, long_score, short_score, primary_tf,
-               entry_reasons, indicators, fee, strategies=None):
+               entry_reasons, indicators, fee, strategies=None, leverage=None):
     c = _conn()
     entry_hour, entry_weekday = _local_time_parts()
     cur = c.execute(
         """
         INSERT INTO trades (symbol, side, status, entry_time, entry_price, qty,
             notional, stop_loss, take_profit, entry_score, long_score, short_score,
-            primary_tf, entry_reasons, indicators, strategies,
+            primary_tf, entry_reasons, indicators, strategies, leverage,
             entry_hour, entry_weekday, fees)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             symbol, side, "open", _now(), entry_price, qty,
             entry_price * qty, stop_loss, take_profit, entry_score,
             long_score, short_score, primary_tf,
             json.dumps(entry_reasons), json.dumps(indicators),
-            json.dumps(strategies or []),
+            json.dumps(strategies or []), leverage,
             entry_hour, entry_weekday, fee,
         ),
     )
@@ -137,17 +143,17 @@ def open_trade(symbol, side, entry_price, qty, stop_loss, take_profit,
 
 
 def close_trade(trade_id, exit_price, exit_reason, pnl, pnl_pct,
-                total_fees, hold_minutes):
+                total_fees, hold_minutes, funding=0.0):
     c = _conn()
     c.execute(
         """
         UPDATE trades
         SET status='closed', exit_time=?, exit_price=?, exit_reason=?,
-            pnl=?, pnl_pct=?, fees=?, hold_minutes=?
+            pnl=?, pnl_pct=?, fees=?, funding=?, hold_minutes=?
         WHERE id=?
         """,
         (_now(), exit_price, exit_reason, pnl, pnl_pct, total_fees,
-         hold_minutes, trade_id),
+         funding, hold_minutes, trade_id),
     )
     c.commit()
 

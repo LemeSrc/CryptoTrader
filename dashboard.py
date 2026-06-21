@@ -215,23 +215,25 @@ def api_analysis():
     by_symbol.sort(key=lambda x: x["count"], reverse=True)
     by_symbol = by_symbol[:15]
 
-    # nach Einstiegs-RSI-Bucket (aus Indikator-Snapshot, Haupt-Zeitrahmen)
-    rsi_buckets = defaultdict(list)
+    # nach Einstiegs-RVOL-Bucket (relatives Volumen beim Einstieg, Haupt-Zeitrahmen)
+    # -> zeigt, ob Trades bei stärkerem Volumen-Surge besser laufen.
+    rvol_buckets = defaultdict(list)
     for t in closed:
         try:
             snap = json.loads(t["indicators"])
-            rsi = snap.get(config.PRIMARY_TIMEFRAME, {}).get("rsi")
+            rvol = snap.get(config.PRIMARY_TIMEFRAME, {}).get("rvol")
         except (TypeError, json.JSONDecodeError, AttributeError):
-            rsi = None
-        if rsi is None:
+            rvol = None
+        if rvol is None:
             continue
-        bucket = f"{int(rsi // 10) * 10}-{int(rsi // 10) * 10 + 10}"
-        rsi_buckets[bucket].append(t)
-    by_rsi = []
-    for b, sub in sorted(rsi_buckets.items()):
+        lo = int(rvol * 2) / 2.0   # auf 0,5er-Schritte abrunden
+        bucket = f"{lo:.1f}-{lo + 0.5:.1f}"
+        rvol_buckets[bucket].append(t)
+    by_rvol = []
+    for b, sub in sorted(rvol_buckets.items(), key=lambda x: float(x[0].split("-")[0])):
         d = _summary(sub)
         d["bucket"] = b
-        by_rsi.append(d)
+        by_rvol.append(d)
 
     # nach Einstiegs-Score-Bucket
     score_buckets = defaultdict(list)
@@ -282,7 +284,7 @@ def api_analysis():
         "by_side": by_side,
         "by_reason": by_reason,
         "by_symbol": by_symbol,
-        "by_rsi": by_rsi,
+        "by_rvol": by_rvol,
         "by_score": by_score,
         "by_hour": by_hour,
         "by_strategy": by_strategy,

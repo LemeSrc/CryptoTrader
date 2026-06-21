@@ -1,10 +1,18 @@
 """
-Anbindung an die öffentliche Binance REST-API.
+Anbindung an die öffentliche Binance-API.
 
-Es werden ausschließlich öffentliche Endpunkte verwendet -> KEIN API-Key nötig
-und kein Risiko. Geliefert werden:
-  * die Top-Coins nach 24h-Handelsvolumen
-  * Candlestick-Daten (Klines) als pandas DataFrame
+Standard ist die USDT-M **Futures**-API (fapi) — passend zum Perp-/Hebel-Sim
+des Volume-Bots: echte Perp-Preise, Futures-Taker-Volumen (Order-Flow) und die
+reale **Funding-Rate** fürs Kostenmodell. Es werden ausschließlich öffentliche
+Endpunkte verwendet -> KEIN API-Key nötig, kein Risiko.
+
+Optionaler Fallback auf Spot (config.USE_FUTURES = False bzw. CT_USE_FUTURES=0):
+gleiche Funktionen, dann ohne Funding (Default-Rate) und mit Spot-Preisen.
+
+Geliefert werden:
+  * die Top-Coins nach 24h-Quote-Volumen (liquideste Perps)
+  * Candlestick-Daten (Klines) als pandas DataFrame (inkl. Taker-Buy-Volumen)
+  * die aktuelle Funding-Rate je Symbol (nur Futures)
 """
 
 import time
@@ -13,23 +21,51 @@ import pandas as pd
 
 import config
 
-BASE_URL = "https://api.binance.com"
-# Fallback-Hosts, falls der Haupt-Host (z.B. regional) blockiert ist
-HOSTS = [
+# --- Host-/Pfad-Auswahl je nach Markt (Futures vs. Spot) -------------------
+# Futures (USDT-M): fapi.binance.com. Klines haben dasselbe 12-Spalten-Format
+# wie Spot, daher funktioniert das Parsing für beide Märkte identisch.
+_FUTURES_HOSTS = ["https://fapi.binance.com"]
+_SPOT_HOSTS = [
     "https://api.binance.com",
     "https://api1.binance.com",
     "https://api-gcp.binance.com",
     "https://data-api.binance.vision",  # reiner Markt-Daten-Host
 ]
 
+
+def _use_futures():
+    return getattr(config, "USE_FUTURES", True)
+
+
+def _hosts():
+    return _FUTURES_HOSTS if _use_futures() else _SPOT_HOSTS
+
+
+def _path(kind):
+    """Endpunkt-Pfad je Markt. kind in {klines, ticker24, funding}."""
+    if _use_futures():
+        return {
+            "klines": "/fapi/v1/klines",
+            "ticker24": "/fapi/v1/ticker/24hr",
+            "funding": "/fapi/v1/premiumIndex",
+            "ping": "/fapi/v1/ping",
+        }[kind]
+    return {
+        "klines": "/api/v3/klines",
+        "ticker24": "/api/v3/ticker/24hr",
+        "funding": None,            # Spot kennt kein Funding
+        "ping": "/api/v3/ping",
+    }[kind]
+
+
 _session = requests.Session()
-_session.headers.update({"User-Agent": "CryptoTraderBot/1.0"})
+_session.headers.update({"User-Agent": "CryptoTraderVolumeBot/2.0"})
 
 
 def _get(path, params=None, retries=3):
     """GET-Request mit Host-Fallback und einfachem Retry."""
     last_err = None
-    for host in HOSTS:
+    for host in _hosts():
         url = host + path
         for attempt in range(retries):
             try:
@@ -51,33 +87,43 @@ def _get(path, params=None, retries=3):
 def ping():
     """Verbindungstest. Gibt True zurück, wenn die API erreichbar ist."""
     try:
-        _get("/api/v3/ping")
+        _get(_path("ping"))
         return True
     except RuntimeError:
         return False
 
 
+def _symbol_ok(sym, quote):
+    """Filtert auf saubere Perp-/Spot-Paare gegen die Quote-Währung."""
+    if not sym.endswith(quote):
+        return False
+    if "_" in sym:                       # Delivery-/Quartals-Kontrakte (z.B. BTCUSDT_240329)
+        return False
+    if sym in config.SYMBOL_BLACKLIST:
+        return False
+    if any(sym.endswith(suf) for suf in config.SYMBOL_EXCLUDE_SUFFIXES):
+        return False
+    return True
+
+
 def get_top_symbols(n=None, quote=None):
     """Liefert die n liquidesten Handelspaare gegen die Quote-Währung.
 
-    Sortiert nach 24h-Quote-Volumen (also tatsächlichem USDT-Umsatz).
+    Sortiert nach 24h-Quote-Volumen (tatsächlicher USDT-Umsatz) -> liquideste
+    Coins zuerst (enger Spread, weniger Slippage).
     """
-    n = n or config.TOP_N_SYMBOLS
+    n = n or config.BASE_UNIVERSE_N
     quote = quote or config.QUOTE_ASSET
-    data = _get("/api/v3/ticker/24hr")
+    data = _get(_path("ticker24"))
 
     rows = []
     for t in data:
-        sym = t["symbol"]
-        if not sym.endswith(quote):
-            continue
-        if sym in config.SYMBOL_BLACKLIST:
-            continue
-        if any(sym.endswith(suf) for suf in config.SYMBOL_EXCLUDE_SUFFIXES):
+        sym = t.get("symbol", "")
+        if not _symbol_ok(sym, quote):
             continue
         try:
             qvol = float(t["quoteVolume"])
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, TypeError):
             continue
         if qvol <= 0:
             continue
@@ -87,14 +133,40 @@ def get_top_symbols(n=None, quote=None):
     return [sym for sym, _ in rows[:n]]
 
 
+def get_funding_rates():
+    """Aktuelle Funding-Rate je Symbol als dict {symbol: rate_pro_8h}.
+
+    Nur Futures. Im Spot-Modus (oder bei Fehler) leeres dict -> der Bot nutzt
+    dann die Default-Funding-Rate aus der Config.
+    """
+    path = _path("funding")
+    if path is None:
+        return {}
+    try:
+        data = _get(path)
+    except RuntimeError:
+        return {}
+    out = {}
+    # /fapi/v1/premiumIndex ohne Symbol -> Liste aller Symbole
+    items = data if isinstance(data, list) else [data]
+    for t in items:
+        sym = t.get("symbol")
+        try:
+            out[sym] = float(t["lastFundingRate"])
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
 def get_klines(symbol, interval, limit=None):
     """Holt Candlestick-Daten und gibt sie als DataFrame zurück.
 
-    Spalten: open_time (datetime, UTC), open, high, low, close, volume, close_time
+    Spalten: open_time (UTC), open, high, low, close, volume, close_time,
+    quote_volume, trades, taker_base, taker_quote.
     """
     limit = limit or config.KLINE_LIMIT
     raw = _get(
-        "/api/v3/klines",
+        _path("klines"),
         params={"symbol": symbol, "interval": interval, "limit": limit},
     )
     if not raw:
@@ -108,8 +180,8 @@ def get_klines(symbol, interval, limit=None):
             "taker_base", "taker_quote", "ignore",
         ],
     )
-    # taker_base = von Taker (Marktorder) gekaufte Basis-Menge -> Kaufdruck-Proxy.
-    # quote_volume / trades dienen Order-Flow- und Liquiditäts-Auswertungen.
+    # taker_base = vom Taker (Marktorder) gekaufte Basis-Menge -> Kaufdruck/Delta.
+    # quote_volume / trades dienen Order-Flow-, Liquiditäts- und Slippage-Schätzung.
     num_cols = ("open", "high", "low", "close", "volume", "quote_volume",
                 "trades", "taker_base", "taker_quote")
     for col in num_cols:
@@ -124,8 +196,12 @@ def get_klines(symbol, interval, limit=None):
 
 if __name__ == "__main__":
     # Kleiner Selbsttest
+    print("Markt:", "FUTURES" if _use_futures() else "SPOT")
     print("Ping:", ping())
     syms = get_top_symbols(10)
     print("Top 10:", syms)
-    df = get_klines(syms[0], "15m", 5)
+    fr = get_funding_rates()
+    if syms and fr:
+        print(f"Funding {syms[0]}: {fr.get(syms[0])}")
+    df = get_klines(syms[0], "1m", 5)
     print(df.tail())

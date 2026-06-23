@@ -157,12 +157,19 @@ def open_position(a):
     price = _fill_price(a["price"], side, is_entry=True, slippage_pct=slip)
     atr = a["atr"]
 
-    # Schutz-Stop (katastrophal): ATR-basiert, gedeckelt klar innerhalb der Liquidation
-    sl_distance = min(config.STOP_ATR_MULT * atr, price * config.MAX_STOP_PCT / 100.0)
+    # Stop-Distanz: bei STRUCTURAL_STOPS direkt aus dem Volume-Level (a["stop"]),
+    # sonst ATR-basiert. In BEIDEN Fällen nur durch die Liquidations-Sicherheit
+    # (MAX_STOP_PCT) gedeckelt — ATR ist dann KEIN Stop-Treiber mehr.
+    max_d = price * config.MAX_STOP_PCT / 100.0
+    struct_stop = a.get("stop")
+    if config.STRUCTURAL_STOPS and struct_stop is not None:
+        sl_distance = min(abs(price - struct_stop), max_d)
+    else:
+        sl_distance = min(config.STOP_ATR_MULT * atr, max_d)
     if sl_distance <= 0:
         return None
 
-    # Ziel: struktur-basiert (POC/nächstes Volume-Node), sonst ATR-Fallback
+    # Ziel: struktur-basiert (Volume-Node), sonst ATR-Fallback
     target = a.get("target")
     if side == "long":
         stop_loss = price - sl_distance

@@ -15,6 +15,7 @@ import numpy as np
 import config
 from indicators import (
     compute_indicators, volume_profile, next_node, delta_divergence,
+    structural_levels,
 )
 
 # Signale, die eine echte Volumen-"Location" markieren (Location-Gate).
@@ -227,13 +228,18 @@ def analyze(symbol, klines_by_tf):
     if config.INVERT_SIGNALS:           # Gate-Konsistenz für die umgekehrte Richtung
         flow_imbalance = -flow_imbalance
 
-    # Struktur-Ziel: zum POC zurück (Magnet) bzw. nächstes Node in Richtung
-    target = None
-    if profile is not None:
-        if side == "long":
-            target = profile["poc"] if price < profile["poc"] else next_node(profile, price, +1)
-        else:
-            target = profile["poc"] if price > profile["poc"] else next_node(profile, price, -1)
+    # Ziel + (optional) struktureller Stop — vollständig aus dem Volume Profile
+    struct_stop = None
+    if config.STRUCTURAL_STOPS:
+        struct_stop, target = structural_levels(profile, price, side)
+    else:
+        # Baseline: Ziel zum POC (Magnet) bzw. nächstes Node; Stop später per ATR
+        target = None
+        if profile is not None:
+            if side == "long":
+                target = profile["poc"] if price < profile["poc"] else next_node(profile, price, +1)
+            else:
+                target = profile["poc"] if price > profile["poc"] else next_node(profile, price, -1)
 
     snapshot = {
         config.PRIMARY_TIMEFRAME: _snapshot_row(
@@ -259,6 +265,7 @@ def analyze(symbol, klines_by_tf):
         "has_location": has_location,
         "profile": profile and {"poc": profile["poc"], "vah": profile["vah"], "val": profile["val"]},
         "target": target,
+        "stop": struct_stop,
         "reasons": reasons_for_side,
         "strategies": strategies,
         "snapshot": snapshot,

@@ -156,6 +156,40 @@ def next_node(profile, price, direction):
     return min(cands) if direction > 0 else max(cands)
 
 
+def structural_levels(profile, price, side, buffer_va_frac=0.15):
+    """Stop UND Ziel vollständig aus dem Volume Profile — keine ATR-Durchschnitte.
+
+    Idee: zwischen den Volumen-Niveaus {Profil-Tief, VAL, POC, VAH, Profil-Hoch}
+    wird das nächste Level in Handelsrichtung das ZIEL, das nächste Level dagegen
+    die Struktur, hinter der (mit kleinem Puffer) der STOP sitzt. Bricht der Kurs
+    dieses Volumen-Level, ist die Idee widerlegt — kein Ausstoppen durch Rauschen.
+
+    `buffer_va_frac`: Puffer hinter das Level als Anteil der Value-Area-Höhe
+    (struktureller Maßstab, kein Mittelwert). Gibt (stop_level, target_level)
+    oder (None, None), wenn kein Profil vorliegt.
+    """
+    if profile is None:
+        return None, None
+    lo, val, poc, vah, hi = (profile["lo"], profile["val"], profile["poc"],
+                             profile["vah"], profile["hi"])
+    # Value-Area-Höhe als struktureller Maßstab (mit robusten Untergrenzen)
+    va_h = max(vah - val, (hi - lo) * 0.3, price * 0.005)
+    buf = va_h * buffer_va_frac
+    levels = sorted({lo, val, poc, vah, hi})
+    above = [l for l in levels if l > price + 1e-12]
+    below = [l for l in levels if l < price - 1e-12]
+
+    if side == "long":
+        target = min(above) if above else price + va_h          # nächstes Volumen-Level / Projektion
+        support = max(below) if below else (price - va_h)       # Struktur, die long widerlegt
+        stop = support - buf
+    else:
+        target = max(below) if below else price - va_h
+        resist = min(above) if above else (price + va_h)
+        stop = resist + buf
+    return stop, target
+
+
 def delta_divergence(df, lookback=40, end=-2):
     """Order-Flow-Divergenz zwischen Preis und CVD auf dem Tail.
     'bull' = tieferes Kurstief, aber höheres CVD-Tief (versteckter Kaufdruck);

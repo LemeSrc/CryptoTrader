@@ -95,6 +95,13 @@ ALLOW_SHORT = True
 # Hypothese-Test "die Richtung ist systematisch verkehrt". Wirkt konsistent auf
 # Einstieg, Ziel/Stop-Richtung UND den Order-Flow-Flip-Exit. Per CT_INVERT_SIGNALS=1.
 INVERT_SIGNALS = False
+
+# Struktur-Stops: Stop UND Ziel kommen direkt aus dem Volume Profile (Stop hinter
+# der nächsten Volumen-Node/Value-Edge, Ziel an der nächsten Node) statt aus dem
+# ATR-Durchschnitt. Der Indikator wird also voll ausgenutzt; ATR dient dann nur
+# noch NICHT mehr als Stop-Treiber. Eigener Schalter (CT_STRUCTURAL_STOPS=1),
+# damit Richtung (INVERT) und Stop-Logik getrennt bewertbar sind.
+STRUCTURAL_STOPS = False
 # Confluence-Score-Schwelle (mehrere Volumen-Signale müssen zusammenkommen).
 ENTRY_SCORE_THRESHOLD = 2.5
 # RVOL-Gate: nur handeln, wenn das Volumen klar erhöht ist (echter Surge),
@@ -192,6 +199,7 @@ REENTRY_COOLDOWN_MINUTES = _ovr("REENTRY_COOLDOWN_MINUTES", int, REENTRY_COOLDOW
 ALLOW_LONG = _ovr_bool("ALLOW_LONG", ALLOW_LONG)
 ALLOW_SHORT = _ovr_bool("ALLOW_SHORT", ALLOW_SHORT)
 INVERT_SIGNALS = _ovr_bool("INVERT_SIGNALS", INVERT_SIGNALS)
+STRUCTURAL_STOPS = _ovr_bool("STRUCTURAL_STOPS", STRUCTURAL_STOPS)
 ORDER_FLOW_FLIP_EXIT = _ovr_bool("ORDER_FLOW_FLIP_EXIT", ORDER_FLOW_FLIP_EXIT)
 
 # Spot-Fallback hat höhere Taker-Fee -> automatisch anheben, falls nicht

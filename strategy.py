@@ -197,6 +197,15 @@ def analyze(symbol, klines_by_tf):
             strat_short[strat] = strat_short.get(strat, 0.0) + pts
         all_reasons.append((config.PROFILE_TF, side, strat, text))
 
+    # TEST-Invertierung: aus Long wird Short und umgekehrt. Vor der Richtungs-
+    # wahl die Aggregate spiegeln -> Side, Ziel, Gates rechnen danach konsistent
+    # für die umgekehrte Richtung (siehe auch flow_imbalance unten + bot._flow_against).
+    if config.INVERT_SIGNALS:
+        long_total, short_total = short_total, long_total
+        strat_long, strat_short = strat_short, strat_long
+        all_reasons = [(tf, "short" if sd == "long" else "long", s, t)
+                       for tf, sd, s, t in all_reasons]
+
     # Richtung
     if long_total >= short_total:
         side, score, strat_points = "long", long_total, strat_long
@@ -215,6 +224,8 @@ def analyze(symbol, klines_by_tf):
     vol_sma = float(last["vol_sma"]) if last["vol_sma"] == last["vol_sma"] and last["vol_sma"] else 0.0
     delta_sma = float(last["delta_sma"]) if last["delta_sma"] == last["delta_sma"] else 0.0
     flow_imbalance = (delta_sma / vol_sma / 2.0) if vol_sma > 0 else 0.0
+    if config.INVERT_SIGNALS:           # Gate-Konsistenz für die umgekehrte Richtung
+        flow_imbalance = -flow_imbalance
 
     # Struktur-Ziel: zum POC zurück (Magnet) bzw. nächstes Node in Richtung
     target = None

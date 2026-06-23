@@ -91,6 +91,10 @@ FUNDING_RATE_DEFAULT_PCT_PER_8H = 0.01
 # ---------------------------------------------------------------------------
 ALLOW_LONG = True
 ALLOW_SHORT = True
+# TEST-Schalter: kehrt jedes Signal um (aus Long wird Short und umgekehrt).
+# Hypothese-Test "die Richtung ist systematisch verkehrt". Wirkt konsistent auf
+# Einstieg, Ziel/Stop-Richtung UND den Order-Flow-Flip-Exit. Per CT_INVERT_SIGNALS=1.
+INVERT_SIGNALS = False
 # Confluence-Score-Schwelle (mehrere Volumen-Signale müssen zusammenkommen).
 ENTRY_SCORE_THRESHOLD = 2.5
 # RVOL-Gate: nur handeln, wenn das Volumen klar erhöht ist (echter Surge),
@@ -187,6 +191,7 @@ MAX_HOLD_MINUTES = _ovr("MAX_HOLD_MINUTES", int, MAX_HOLD_MINUTES)
 REENTRY_COOLDOWN_MINUTES = _ovr("REENTRY_COOLDOWN_MINUTES", int, REENTRY_COOLDOWN_MINUTES)
 ALLOW_LONG = _ovr_bool("ALLOW_LONG", ALLOW_LONG)
 ALLOW_SHORT = _ovr_bool("ALLOW_SHORT", ALLOW_SHORT)
+INVERT_SIGNALS = _ovr_bool("INVERT_SIGNALS", INVERT_SIGNALS)
 ORDER_FLOW_FLIP_EXIT = _ovr_bool("ORDER_FLOW_FLIP_EXIT", ORDER_FLOW_FLIP_EXIT)
 
 # Spot-Fallback hat höhere Taker-Fee -> automatisch anheben, falls nicht

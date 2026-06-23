@@ -242,7 +242,11 @@ def close_position(trade, exit_price, exit_reason, slippage_pct):
 
 
 def _flow_against(ind, side):
-    """True, wenn der aggressive Order-Flow auf 1m klar GEGEN die Position dreht."""
+    """True, wenn der aggressive Order-Flow auf 1m klar GEGEN die Position dreht.
+    Bei INVERT_SIGNALS wird der Flow-Exit ebenfalls invertiert (gegen die
+    Gegenrichtung geprüft), damit der Test in sich konsistent bleibt."""
+    if config.INVERT_SIGNALS:
+        side = "short" if side == "long" else "long"
     cur = ind.iloc[-2]
     vol_sma = float(cur["vol_sma"]) if cur["vol_sma"] == cur["vol_sma"] and cur["vol_sma"] else 0.0
     delta_sma = float(cur["delta_sma"]) if cur["delta_sma"] == cur["delta_sma"] else 0.0

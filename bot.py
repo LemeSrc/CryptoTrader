@@ -15,6 +15,7 @@ from datetime import datetime, timezone, timedelta
 import config
 import database as db
 import binance_client as bx
+import learned
 from indicators import compute_indicators
 from strategy import analyze, signal_is_valid
 
@@ -39,6 +40,8 @@ FEE_RATE = config.TAKER_FEE_PCT / 100.0
 # Funding-Raten je Symbol (Perp), periodisch aktualisiert.
 _funding_rates = {}
 _last_funding_refresh = 0.0
+# Aktueller Hot-List-Rang je Symbol (1 = heißester Coin); für den Trade-Kontext.
+_hot_rank = {}
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +191,43 @@ def open_position(a):
         log.info("SKIP  %-12s %-5s | erwartet nur %.1f€ < %.0f€ (Ziel zu nah / Caps)",
                  a["symbol"], side.upper(), expected_profit, config.MIN_PROFIT_USDT)
         return None
+
+    # --- Kontext-Block für den Snapshot: alles, was der nächste Daten-Export
+    #     zum Lernen gebrauchen kann (Kosten, Umfeld, Historie, aktive Flags).
+    recent = db.recent_closed_pnls(10)
+    streak = 0
+    for p in recent:                     # vorzeichenbehafteter Win/Loss-Streak
+        s = 1 if p > 0 else -1
+        if streak == 0 or (streak > 0) == (s > 0):
+            streak += s
+        else:
+            break
+    now_utc = datetime.now(timezone.utc)
+    a["snapshot"]["ctx"] = {
+        "equity": round(equity, 2),
+        "expected_profit": round(expected_profit, 2),
+        "target_dist_pct": round(target_distance / price * 100, 4),
+        "stop_dist_pct": round(sl_distance / price * 100, 4),
+        "slippage_pct": round(slip, 4),
+        "spread_pct": config.SPREAD_PCT,
+        "fee_pct": config.TAKER_FEE_PCT,
+        "funding_rate_8h": _funding_rate(a["symbol"]),
+        "hot_rank": _hot_rank.get(a["symbol"]),
+        "open_positions": db.count_open(),
+        "last3_pnl": round(sum(recent[:3]), 2),
+        "last10_pnl": round(sum(recent), 2),
+        "streak": streak,
+        "symbol_last_pnl": db.last_pnl_for_symbol(a["symbol"]),
+        "hour_utc": now_utc.hour,
+        "weekday_utc": now_utc.weekday(),
+        "invert_signals": config.INVERT_SIGNALS,
+        "structural_stops": config.STRUCTURAL_STOPS,
+        "data_rules": config.DATA_RULES,
+        "rules_version": learned.RULES_VERSION,
+        "leverage": config.LEVERAGE,
+        "min_rvol": config.MIN_RVOL,
+        "entry_threshold": config.ENTRY_SCORE_THRESHOLD,
+    }
 
     entry_fee = notional * FEE_RATE
     trade_id = db.open_trade(
@@ -376,6 +416,8 @@ def run():
             # Hot-List (Live-RVOL-Ranking) periodisch neu bestimmen
             if universe and time.time() - last_hotlist_refresh > config.HOTLIST_REFRESH_SECONDS:
                 hot = rank_hot_symbols(universe)
+                _hot_rank.clear()
+                _hot_rank.update({s: i + 1 for i, s in enumerate(hot)})
                 last_hotlist_refresh = time.time()
                 log.info("Hot-List: %s", ", ".join(hot) if hot else "—")
 
@@ -393,12 +435,20 @@ def run():
                     break
                 if symbol in open_syms or symbol in cooling:
                     continue
+                # datenbasiert geblockte Coins gar nicht erst scannen (API sparen)
+                if config.DATA_RULES and symbol in learned.BLOCKED_SYMBOLS:
+                    continue
                 try:
                     tfs = fetch_all_timeframes(symbol)
                     if tfs is None:
                         continue
                     a = analyze(symbol, tfs)
                     if signal_is_valid(a):
+                        allowed, why = learned.entry_allowed(a)
+                        if not allowed:
+                            log.info("RULE  %-12s %-5s | gelernte Regel: %s",
+                                     symbol, a["side"].upper(), why)
+                            continue
                         if open_position(a):
                             open_syms.add(symbol)
                             opened += 1

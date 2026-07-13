@@ -243,4 +243,36 @@ def compute_indicators(df, atr_period=14, vol_period=20, cvd_window=10):
     df["obv"] = obv(df)
     df["obv_slope"] = df["obv"] - df["obv"].shift(cvd_window)
 
+    # --- Zusatz-Features (für die datengetriebene Auswertung der Exporte) ---
+    # Normierte Größen sind über Coins hinweg vergleichbar -> besseres Lernmaterial.
+    df["atr_pct"] = (df["atr"] / df["close"].replace(0, np.nan) * 100).fillna(0)
+    df["delta_ratio"] = (df["delta"] / df["volume"].replace(0, np.nan)).fillna(0)
+    df["cvd_roc_norm"] = (df["cvd_roc"]
+                          / (df["vol_sma"] * cvd_window).replace(0, np.nan)).fillna(0)
+    if "quote_volume" in df.columns:
+        qsma = sma(df["quote_volume"], vol_period)
+        df["rvol_quote"] = (df["quote_volume"] / qsma.replace(0, np.nan)).fillna(0)
+    else:
+        df["rvol_quote"] = 0.0
+    if "trades" in df.columns:
+        tsma = sma(df["trades"], vol_period)
+        df["trades_rvol"] = (df["trades"] / tsma.replace(0, np.nan)).fillna(0)
+        df["avg_trade_size"] = (df["volume"] / df["trades"].replace(0, np.nan)).fillna(0)
+    else:
+        df["trades_rvol"] = 0.0
+        df["avg_trade_size"] = 0.0
+    rng = (df["high"] - df["low"]).replace(0, np.nan)
+    df["body_ratio"] = ((df["close"] - df["open"]).abs() / rng).fillna(0)
+    df["range_pct"] = (rng / df["close"].replace(0, np.nan) * 100).fillna(0)
+    df["close_pos_in_range"] = ((df["close"] - df["low"]) / rng).fillna(0.5)
+    # Vorzeichenbehafteter Streak gleichgerichteter Schlusskurse (+3 = 3 grüne in Folge)
+    direction = np.sign(df["close"].diff().fillna(0)).to_numpy()
+    streak = np.zeros(len(df))
+    for i in range(1, len(df)):
+        if direction[i] != 0 and direction[i] == direction[i - 1]:
+            streak[i] = streak[i - 1] + direction[i]
+        else:
+            streak[i] = direction[i]
+    df["updown_streak"] = streak
+
     return df

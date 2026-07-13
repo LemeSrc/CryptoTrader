@@ -102,6 +102,10 @@ INVERT_SIGNALS = False
 # noch NICHT mehr als Stop-Treiber. Eigener Schalter (CT_STRUCTURAL_STOPS=1),
 # damit Richtung (INVERT) und Stop-Logik getrennt bewertbar sind.
 STRUCTURAL_STOPS = False
+
+# Datengetriebene Entry-Regeln aus den eigenen Trade-Exporten (learned.py).
+# Regeln + Herleitung + Version stehen dort. Abschaltbar per CT_DATA_RULES=0.
+DATA_RULES = True
 # Confluence-Score-Schwelle (mehrere Volumen-Signale müssen zusammenkommen).
 ENTRY_SCORE_THRESHOLD = 2.5
 # RVOL-Gate: nur handeln, wenn das Volumen klar erhöht ist (echter Surge),
@@ -200,6 +204,7 @@ ALLOW_LONG = _ovr_bool("ALLOW_LONG", ALLOW_LONG)
 ALLOW_SHORT = _ovr_bool("ALLOW_SHORT", ALLOW_SHORT)
 INVERT_SIGNALS = _ovr_bool("INVERT_SIGNALS", INVERT_SIGNALS)
 STRUCTURAL_STOPS = _ovr_bool("STRUCTURAL_STOPS", STRUCTURAL_STOPS)
+DATA_RULES = _ovr_bool("DATA_RULES", DATA_RULES)
 ORDER_FLOW_FLIP_EXIT = _ovr_bool("ORDER_FLOW_FLIP_EXIT", ORDER_FLOW_FLIP_EXIT)
 
 # Spot-Fallback hat höhere Taker-Fee -> automatisch anheben, falls nicht

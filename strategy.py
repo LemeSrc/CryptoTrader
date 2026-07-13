@@ -127,6 +127,10 @@ def _snapshot_row(row, extra=None):
         "close", "volume", "quote_volume", "atr",
         "rvol", "vol_sma", "taker_buy_ratio", "delta", "delta_sma",
         "cvd", "cvd_roc", "vwap", "vwap_dist_atr", "mfi", "obv_slope",
+        # Zusatz-Features (normiert, coin-übergreifend vergleichbar)
+        "atr_pct", "delta_ratio", "cvd_roc_norm", "rvol_quote",
+        "trades_rvol", "avg_trade_size", "body_ratio", "range_pct",
+        "close_pos_in_range", "updown_streak",
     ]
     out = {}
     for k in keys:
@@ -241,11 +245,23 @@ def analyze(symbol, klines_by_tf):
             else:
                 target = profile["poc"] if price > profile["poc"] else next_node(profile, price, -1)
 
+    # Profil-Lage als normierte Distanzen (%) -> über Coins vergleichbar
+    prof_extra = {"poc": None, "vah": None, "val": None,
+                  "dist_poc_pct": None, "dist_vah_pct": None, "dist_val_pct": None,
+                  "va_width_pct": None, "profile_pos": None}
+    if profile is not None and price > 0:
+        prof_extra.update({
+            "poc": profile["poc"], "vah": profile["vah"], "val": profile["val"],
+            "dist_poc_pct": (price - profile["poc"]) / price * 100,
+            "dist_vah_pct": (price - profile["vah"]) / price * 100,
+            "dist_val_pct": (price - profile["val"]) / price * 100,
+            "va_width_pct": (profile["vah"] - profile["val"]) / price * 100,
+            # Position im Profil 0..1 (0 = Profil-Tief, 1 = Profil-Hoch)
+            "profile_pos": ((price - profile["lo"]) / (profile["hi"] - profile["lo"])
+                            if profile["hi"] > profile["lo"] else None),
+        })
     snapshot = {
-        config.PRIMARY_TIMEFRAME: _snapshot_row(
-            last, extra={"poc": profile["poc"] if profile else None,
-                         "vah": profile["vah"] if profile else None,
-                         "val": profile["val"] if profile else None}),
+        config.PRIMARY_TIMEFRAME: _snapshot_row(last, extra=prof_extra),
         config.CONTEXT_TF: _snapshot_row(enriched[config.CONTEXT_TF].iloc[-2])
         if config.CONTEXT_TF in enriched else {},
     }

@@ -186,6 +186,27 @@ def symbols_closed_since(cutoff_iso):
     return {r["symbol"] for r in rows}
 
 
+def recent_closed_pnls(n=10):
+    """PnL der letzten n geschlossenen Trades (neueste zuerst) — für
+    Streak-/Kontext-Features im Trade-Snapshot."""
+    c = _conn()
+    rows = c.execute(
+        "SELECT pnl FROM trades WHERE status='closed' ORDER BY id DESC LIMIT ?",
+        (n,),
+    ).fetchall()
+    return [r["pnl"] or 0.0 for r in rows]
+
+
+def last_pnl_for_symbol(symbol):
+    """PnL des letzten geschlossenen Trades auf diesem Coin (oder None)."""
+    c = _conn()
+    r = c.execute(
+        "SELECT pnl FROM trades WHERE status='closed' AND symbol=? ORDER BY id DESC LIMIT 1",
+        (symbol,),
+    ).fetchone()
+    return r["pnl"] if r else None
+
+
 def record_equity(equity_value, open_count):
     c = _conn()
     c.execute(

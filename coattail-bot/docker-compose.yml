@@ -1,0 +1,22 @@
+services:
+  coattail:
+    build: .
+    image: coattail:latest
+    container_name: coattail
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Europe/Berlin
+    volumes:
+      - coattail-data:/app/data
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    # Ein Bot, der still im Hintergrund laeuft, soll nicht die ganze Maschine
+    # belegen, wenn eine Quelle Unsinn liefert.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+volumes:
+  coattail-data:

@@ -1,0 +1,35 @@
+[Unit]
+Description=Coattail Copy-Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coattail
+Group=coattail
+WorkingDirectory=/opt/coattail
+EnvironmentFile=/opt/coattail/.env
+ExecStart=/opt/coattail/.venv/bin/coattail run
+Restart=always
+RestartSec=10
+# Nach zu vielen Fehlstarts stehenbleiben, statt in einer Schleife zu haengen
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Ein Handelsbot braucht Netz, eine Datenbankdatei und sonst nichts.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/coattail/data /opt/coattail/logs
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=coattail
+
+[Install]
+WantedBy=multi-user.target

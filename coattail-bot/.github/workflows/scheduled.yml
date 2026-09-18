@@ -1,0 +1,92 @@
+# Betrieb ohne eigenen Server.
+#
+# Taugt fuer Kongress-Meldungen, die ohnehin nur ein paar Mal am Tag erscheinen.
+# Taugt nicht fuer Posts: der kuerzeste Takt liegt bei fuenf Minuten und in der
+# Praxis eher bei fuenfzehn, und GitHub verwirft Laeufe bei Auslastung.
+#
+# Der Zustand wird als Artefakt weitergereicht, weil ein Runner nichts behaelt.
+# Artefakte laufen nach 90 Tagen ab. Wer laenger als ein paar Wochen so faehrt,
+# sollte auf einen Server umziehen.
+
+name: Geplanter Lauf
+
+on:
+  schedule:
+    - cron: "*/30 13-21 * * 1-5"   # alle 30 Minuten waehrend der US-Handelszeit
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry_run, paper oder live"
+        default: dry_run
+
+concurrency:
+  group: coattail-scheduled
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -e ".[brokers]"
+
+      - name: Letzten Zustand holen
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: coattail-state
+          path: data
+
+      - name: Durchlauf
+        env:
+          COATTAIL_CONTACT: ${{ secrets.COATTAIL_CONTACT }}
+          QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: coattail run-once
+
+      - name: Zustand sichern
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coattail-state
+          path: data/coattail.db
+          retention-days: 90
+          overwrite: true
+
+  rescore:
+    # Die Neubewertung laeuft getrennt, weil sie lange dauert und den
+    # Handelstakt sonst blockiert.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: coattail-state
+          path: data
+      - env:
+          COATTAIL_CONTACT: ${{ secrets.COATTAIL_CONTACT }}
+        run: |
+          if [ "$(date -u +%H)" = "03" ]; then
+            coattail score
+          else
+            echo "Neubewertung laeuft nur nachts."
+          fi

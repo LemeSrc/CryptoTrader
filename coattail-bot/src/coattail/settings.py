@@ -15,8 +15,32 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
+def _find_default_config() -> Path:
+    """Wo config.yaml liegt, haengt von der Installationsart ab.
+
+    Bei einem Checkout mit 'pip install -e .' liegt settings.py unter
+    src/coattail/, drei Ebenen ueber der Datei ist dann der Projektordner.
+    Bei einer normalen Installation ('pip install .', genau das macht
+    deploy/setup_vps.sh) landet dieselbe Datei aber tief in
+    .venv/lib/pythonX.Y/site-packages/coattail/, und dieselbe Rechnung
+    zeigt ins Leere. Deshalb zuerst die Orte pruefen, an denen die Datei
+    im Betrieb tatsaechlich liegt, und den Quellcode-Pfad nur als letzten
+    Rueckfall nehmen.
+    """
+    candidates = [
+        Path.cwd() / "config" / "config.yaml",  # systemd WorkingDirectory=/opt/coattail
+        Path("/opt/coattail/config/config.yaml"),  # Standardablage von setup_vps.sh
+        Path(__file__).resolve().parents[2] / "config" / "config.yaml",  # Checkout aus dem Quellcode
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = REPO_ROOT / "config" / "config.yaml"
+DEFAULT_CONFIG = _find_default_config()
 
 
 class Secrets(BaseSettings):

@@ -137,3 +137,23 @@ def test_haengengebliebene_signale_werden_wieder_eingereiht(config):
     with session_scope() as session:
         sig = session.scalar(select(Signal).where(Signal.dedupe_key == "haenger"))
         assert sig.status == "simulated"
+
+
+def test_config_pfad_bei_installierter_venv_gefunden(tmp_path, monkeypatch):
+    """Regressionstest fuer den Bug aus der ersten Serverinstallation: bei
+    'pip install .' (kein editables Setup) landet settings.py tief in
+    .venv/lib/pythonX.Y/site-packages/coattail/, und die alte Rechnung
+    (drei Ebenen hoch) zeigte dann ins Leere. config.yaml wurde dadurch
+    still ignoriert und der Bot lief nur mit den eingebauten Vorgaben,
+    ganz ohne Datenquellen."""
+    from coattail.settings import _find_default_config
+
+    # Deploy-Layout nachstellen: config.yaml liegt neben dem cwd, in dem
+    # 'coattail' aufgerufen wird (so wie unter systemd, WorkingDirectory
+    # ist dort /opt/coattail).
+    (tmp_path / "config").mkdir()
+    expected = tmp_path / "config" / "config.yaml"
+    expected.write_text("timezone: Europe/Berlin\n")
+
+    monkeypatch.chdir(tmp_path)
+    assert _find_default_config() == expected

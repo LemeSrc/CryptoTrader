@@ -36,46 +36,98 @@ class SecForm4Source(DisclosureSource):
     CURRENT = "https://www.sec.gov/cgi-bin/browse-edgar"
 
     def fetch(self, since: dt.datetime | None = None) -> Iterable[RawTrade]:
-        count = int(self.options.get("count", 100))
         min_value = float(self.options.get("min_value_usd", 250_000))
         only_buys = bool(self.options.get("only_buys", True))
-        params = {
-            "action": "getcurrent",
-            "type": "4",
-            "owner": "include",
-            "count": count,
-            "output": "atom",
-        }
-        with HttpClient(headers={"Accept": "application/atom+xml"}) as client:
+        with HttpClient(headers={"Accept": "application/atom+xml, application/xml, text/plain"}) as client:
+            for link, updated in self._current_filings(client, since):
+                try:
+                    trades = self._parse_filing(client, link, updated)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("Form-4-Dokument uebersprungen (%s): %s", link, exc)
+                    continue
+                for trade in trades:
+                    if only_buys and trade.side != "buy":
+                        continue
+                    value = (trade.price or 0) * (trade.quantity or 0)
+                    if value and value < min_value:
+                        continue
+                    yield trade
+
+    def _current_filings(
+        self, client: HttpClient, since: dt.datetime | None
+    ) -> list[tuple[str, dt.datetime | None]]:
+        """Neueste Form-4-Meldungen, seitenweise bis zum letzten Lauf.
+
+        Der Feed fuehrt jede Meldung zweimal, einmal beim Unternehmen und
+        einmal bei der meldenden Person. Gezaehlt wird sie einmal, erkannt an
+        der Accession-Nummer. Am Abend kommen in einer Viertelstunde leicht
+        mehr als hundert Meldungen, deshalb wird weitergeblaettert, bis der
+        Stand des letzten Laufs erreicht ist oder max_pages voll sind.
+        """
+        count = min(100, int(self.options.get("count", 100)))
+        max_pages = int(self.options.get("max_pages", 8))
+        seen: set[str] = set()
+        out: list[tuple[str, dt.datetime | None]] = []
+        for page in range(max_pages):
+            params = {
+                "action": "getcurrent",
+                "type": "4",
+                "owner": "include",
+                "count": count,
+                "start": page * count,
+                "output": "atom",
+            }
             try:
                 resp = client.get(self.CURRENT, params=params)
                 resp.raise_for_status()
                 feed = ET.fromstring(resp.content)
             except Exception as exc:  # noqa: BLE001
                 log.warning("SEC Atom-Feed nicht lesbar: %s", exc)
-                return
-
-            for entry in feed.findall("a:entry", ATOM_NS):
+                break
+            entries = feed.findall("a:entry", ATOM_NS)
+            if not entries:
+                break
+            reached_since = False
+            for entry in entries:
                 link_el = entry.find("a:link", ATOM_NS)
                 link = link_el.get("href") if link_el is not None else None
                 updated = to_utc(entry.findtext("a:updated", default="", namespaces=ATOM_NS))
-                if not link or (since and updated and updated < since):
+                if since and updated and updated < since:
+                    reached_since = True
                     continue
-                try:
-                    for trade in self._parse_filing(client, link, updated):
-                        if only_buys and trade.side != "buy":
-                            continue
-                        value = (trade.price or 0) * (trade.quantity or 0)
-                        if value and value < min_value:
-                            continue
-                        yield trade
-                except Exception as exc:  # noqa: BLE001
-                    log.debug("Form-4-Dokument uebersprungen (%s): %s", link, exc)
+                match = ACC_RE.search(link or "")
+                if not link or not match:
+                    continue
+                accession = "".join(match.groups())
+                if accession in seen:
+                    continue
+                seen.add(accession)
+                out.append((link, updated))
+            if reached_since or since is None:
+                break
+        return out
 
     def _parse_filing(
         self, client: HttpClient, index_url: str, updated: dt.datetime | None
     ) -> list[RawTrade]:
-        """Vom Filing-Index zum eigentlichen ownershipDocument."""
+        """Vom Filing-Index zum eigentlichen ownershipDocument.
+
+        Die vollstaendige Einreichung als Textdatei enthaelt das XML direkt,
+        das spart gegenueber Index plus Dokument die Haelfte der Abrufe.
+        """
+        root = None
+        txt_url = re.sub(r"-index\.html?$", ".txt", index_url)
+        if txt_url != index_url:
+            resp = client.get(txt_url)
+            if resp.status_code == 200:
+                root = ownership_xml(resp.text)
+        if root is None:
+            root = self._ownership_via_index(client, index_url)
+        if root is None:
+            return []
+        return self._trades_from_xml(root, index_url, updated)
+
+    def _ownership_via_index(self, client: HttpClient, index_url: str):  # noqa: ANN202
         base = index_url.rsplit("/", 1)[0]
         listing = client.json(f"{base}/index.json")
         doc_name = None
@@ -85,11 +137,14 @@ class SecForm4Source(DisclosureSource):
                 doc_name = fname
                 break
         if not doc_name:
-            return []
+            return None
         resp = client.get(f"{base}/{doc_name}")
         resp.raise_for_status()
-        root = ET.fromstring(resp.content)
+        return ET.fromstring(resp.content)
 
+    def _trades_from_xml(
+        self, root: ET.Element, index_url: str, updated: dt.datetime | None
+    ) -> list[RawTrade]:
         issuer = root.find("issuer")
         symbol = clean_symbol(issuer.findtext("issuerTradingSymbol") if issuer is not None else None)
         owner = root.find("reportingOwner/reportingOwnerId")
@@ -129,6 +184,20 @@ class SecForm4Source(DisclosureSource):
                 )
             )
         return out
+
+
+_XML_BLOCK = re.compile(r"<XML>\s*(.*?)\s*</XML>", re.DOTALL | re.IGNORECASE)
+
+
+def ownership_xml(submission: str) -> ET.Element | None:
+    """Das ownershipDocument aus einer vollstaendigen EDGAR-Einreichung."""
+    for block in _XML_BLOCK.findall(submission):
+        if "<ownershipDocument" in block:
+            try:
+                return ET.fromstring(block.encode("utf-8"))
+            except ET.ParseError:
+                return None
+    return None
 
 
 class Sec13FSource(DisclosureSource):

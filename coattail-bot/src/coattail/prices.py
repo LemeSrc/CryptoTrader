@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import logging
 import os
+import time
+from collections.abc import Iterable
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +22,11 @@ import pandas as pd
 from .http import HttpClient
 
 log = logging.getLogger(__name__)
+
+# yfinance meldet jeden unbekannten oder eingestellten Titel als ERROR. Bei
+# alten Kongressmeldungen sind das viele (umbenannte Firmen, Anleihen), und das
+# ueberdeckt im Journal die Meldungen, auf die es ankommt.
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 # Offline-Modus. Erzeugt deterministische Zufallspfade statt echter Kurse.
 # Gedacht fuer Tests und fuer den ersten Trockenlauf ohne Netz, damit sich
@@ -54,6 +62,11 @@ class PriceProvider:
         self.quote_ttl = dt.timedelta(seconds=quote_ttl_seconds)
         self._mem: dict[str, tuple[dt.datetime, pd.Series]] = {}
         self._quotes: dict[str, tuple[dt.datetime, float]] = {}
+        # Titel ohne Kursdaten. Ohne dieses Gedaechtnis fragt die Bewertung
+        # fuer jede Meldung zehnmal erneut im Netz nach, jedes Mal mit
+        # Wartezeiten. Genau das hat den ersten Lauf auf Stunden gestreckt.
+        self._missing_path = self.cache_dir / "_missing.json"
+        self._missing: dict[str, float] = self._load_missing()
 
     # ------------------------------------------------------------------ Cache
     def _cache_path(self, symbol: str, asset_class: str) -> Path:
@@ -78,7 +91,84 @@ class PriceProvider:
         except Exception as exc:  # noqa: BLE001
             log.debug("Cache nicht schreibbar (%s): %s", path, exc)
 
+    def _load_missing(self) -> dict[str, float]:
+        try:
+            raw = json.loads(self._missing_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        cutoff = time.time() - self.max_age.total_seconds()
+        return {k: float(v) for k, v in raw.items() if float(v) > cutoff}
+
+    def _is_missing(self, key: str) -> bool:
+        stamp = self._missing.get(key)
+        return stamp is not None and time.time() - stamp < self.max_age.total_seconds()
+
+    def _mark_missing(self, key: str) -> None:
+        self._missing[key] = time.time()
+        try:
+            self._missing_path.write_text(json.dumps(self._missing), encoding="utf-8")
+        except OSError as exc:
+            log.debug("Fehlliste nicht schreibbar: %s", exc)
+
     # ------------------------------------------------------------------ Abruf
+    def prefetch(self, symbols: Iterable[str], *, years: float = 4.0, chunk: int = 100) -> int:
+        """Viele Aktienreihen auf einmal laden, bevor die Bewertung sie einzeln braucht.
+
+        Ein Sammelabruf ueber yfinance statt tausend Einzelabrufe. Was dabei
+        nicht ankommt, holt history() spaeter einzeln nach. Liefert die Zahl
+        der neu geladenen Reihen.
+        """
+        if SYNTHETIC:
+            return 0
+        todo = []
+        for symbol in sorted(set(symbols)):
+            key = f"equity:{symbol}"
+            if self._is_missing(key) or key in self._mem:
+                continue
+            if self._read_cache(self._cache_path(symbol, "equity")) is not None:
+                continue
+            todo.append(symbol)
+        if not todo:
+            return 0
+        try:
+            import yfinance as yf
+        except ImportError:
+            return 0
+
+        log.info("Lade Kursreihen fuer %d Titel im Sammelabruf", len(todo))
+        loaded = 0
+        for start in range(0, len(todo), chunk):
+            part = todo[start : start + chunk]
+            ysyms = {yahoo_symbol(s): s for s in part}
+            for attempt in range(2):
+                try:
+                    data = yf.download(
+                        list(ysyms), period=f"{int(years * 365)}d", auto_adjust=True,
+                        progress=False, threads=True, group_by="ticker",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Sammelabruf fehlgeschlagen: %s", exc)
+                    data = None
+                if data is not None and not data.empty:
+                    break
+                if attempt == 0:
+                    time.sleep(30)  # meist ein kurzes Limit bei Yahoo
+            if data is None or data.empty:
+                continue
+            now = dt.datetime.now(dt.UTC)
+            for ysym, symbol in ysyms.items():
+                series = _close_column(data, ysym)
+                if series is None or series.empty:
+                    continue
+                series.index = pd.to_datetime(series.index).tz_localize(None).normalize()
+                series = series[~series.index.duplicated(keep="last")].sort_index()
+                self._mem[f"equity:{symbol}"] = (now, series)
+                self._write_cache(self._cache_path(symbol, "equity"), series)
+                loaded += 1
+            log.info("Sammelabruf: %d von %d Titeln geladen", min(start + chunk, len(todo)), len(todo))
+            time.sleep(2)
+        return loaded
+
     def history(
         self, symbol: str, *, asset_class: str = "equity", years: float = 4.0
     ) -> pd.Series | None:
@@ -92,6 +182,8 @@ class PriceProvider:
         if cached is not None and not cached.empty:
             self._mem[key] = (now, cached)
             return cached
+        if not SYNTHETIC and self._is_missing(key):
+            return None
 
         if SYNTHETIC:
             series = self._synthetic_history(symbol, years)
@@ -102,6 +194,8 @@ class PriceProvider:
                 else self._equity_history(symbol, years)
             )
         if series is None or series.empty:
+            if not SYNTHETIC:
+                self._mark_missing(key)
             return None
         series = series[~series.index.duplicated(keep="last")].sort_index()
         self._mem[key] = (now, series)
@@ -128,7 +222,9 @@ class PriceProvider:
         try:
             import yfinance as yf
 
-            data = yf.Ticker(symbol).history(period=f"{int(years * 365)}d", auto_adjust=True)
+            data = yf.Ticker(yahoo_symbol(symbol)).history(
+                period=f"{int(years * 365)}d", auto_adjust=True
+            )
             if not data.empty:
                 s = data["Close"].astype(float)
                 s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
@@ -138,9 +234,20 @@ class PriceProvider:
         return self._stooq_history(symbol)
 
     def _stooq_history(self, symbol: str) -> pd.Series | None:
+        """Notnagel mit genau einem Versuch. Mit Wiederholungen und Wartezeiten
+        kostete jeder unbekannte Titel hier bis zu zwei Minuten."""
         try:
-            with HttpClient() as client:
-                resp = client.get(STOOQ, params={"s": f"{symbol.lower()}.us", "i": "d"})
+            import httpx
+
+            from .http import user_agent
+
+            resp = httpx.get(
+                STOOQ,
+                params={"s": f"{symbol.lower()}.us", "i": "d"},
+                headers={"User-Agent": user_agent()},
+                timeout=10.0,
+                follow_redirects=True,
+            )
             if resp.status_code != 200 or "Date" not in resp.text[:64]:
                 return None
             from io import StringIO
@@ -249,3 +356,24 @@ class PriceProvider:
         if series is None or len(series) < window + 1:
             return None
         return float(series.diff().abs().tail(window).mean())
+
+
+def yahoo_symbol(symbol: str) -> str:
+    """Yahoo schreibt Aktienklassen mit Bindestrich: BRK.B heisst dort BRK-B."""
+    return symbol.replace(".", "-").replace("/", "-")
+
+
+def _close_column(data: pd.DataFrame, ysym: str) -> pd.Series | None:
+    """Schlusskurse eines Titels aus dem Ergebnis von yf.download."""
+    try:
+        if isinstance(data.columns, pd.MultiIndex):
+            if ysym not in data.columns.get_level_values(0):
+                return None
+            frame = data[ysym]
+        else:
+            frame = data
+        if "Close" not in frame.columns:
+            return None
+        return frame["Close"].dropna().astype(float)
+    except Exception:  # noqa: BLE001
+        return None

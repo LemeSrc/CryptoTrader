@@ -8,11 +8,39 @@ import logging
 from sqlalchemy import func, select
 
 from .app import App
-from .db import session_scope
-from .models import Actor, ActorStat, EquitySnapshot, Order, Signal
+from .db import session_scope, set_state
+from .models import Actor, ActorStat, Disclosure, EquitySnapshot, Order, Signal
 from .scoring.score import rescore_actor
 
 log = logging.getLogger(__name__)
+
+
+RESCORE_STATE = "rescore"
+
+
+def _prefetch_prices(app: App, actor_ids: list[int]) -> None:
+    """Alle benoetigten Aktienreihen vorab im Sammelabruf holen."""
+    prefetch = getattr(app.prices, "prefetch", None)
+    if prefetch is None or not actor_ids:
+        return
+    cutoff = dt.date.today() - dt.timedelta(days=app.config.scoring.lookback_days)
+    with session_scope() as session:
+        symbols = set(
+            session.scalars(
+                select(Disclosure.symbol)
+                .where(
+                    Disclosure.actor_id.in_(actor_ids),
+                    Disclosure.asset_class == "equity",
+                    Disclosure.transaction_date >= cutoff,
+                )
+                .distinct()
+            )
+        )
+    symbols.add(app.config.scoring.benchmark)
+    try:
+        prefetch(symbols)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Sammelabruf der Kurse fehlgeschlagen, es geht einzeln weiter: %s", exc)
 
 
 def rescore_all(app: App, only_source: str | None = None) -> dict[str, int]:
@@ -28,6 +56,7 @@ def rescore_all(app: App, only_source: str | None = None) -> dict[str, int]:
             stmt = stmt.where(Actor.source == only_source)
         actor_ids = list(session.scalars(stmt))
     log.info("Bewerte %d Personen", len(actor_ids))
+    _prefetch_prices(app, actor_ids)
     # Eine Transaktion pro Person. Ein einziger Block ueber alle wuerde die
     # Datenbank fuer die gesamte Laufzeit sperren, und die Quellen, die
     # parallel schreiben wollen, liefen in 'database is locked'.
@@ -46,7 +75,16 @@ def rescore_all(app: App, only_source: str | None = None) -> dict[str, int]:
             continue
         out["bewertet"] += 1
         out["geeignet"] += int(eligible)
+        if out["bewertet"] % 10 == 0:
+            log.info("Bewertung: %d von %d Personen", out["bewertet"], len(actor_ids))
     log.info("Bewertung fertig: %(bewertet)d geprueft, %(geeignet)d freigegeben", out)
+    if only_source is None:
+        with session_scope() as session:
+            set_state(
+                session,
+                RESCORE_STATE,
+                {"finished_at": dt.datetime.now(dt.UTC).isoformat(), **out},
+            )
     return out
 
 

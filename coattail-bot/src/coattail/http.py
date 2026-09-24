@@ -33,21 +33,28 @@ def user_agent() -> str:
 class RateLimiter:
     """Minimaler Token-Bucket pro Host."""
 
-    def __init__(self, min_interval: float = 1.0) -> None:
+    def __init__(self, min_interval: float = 1.0, per_host: dict[str, float] | None = None) -> None:
         self.min_interval = min_interval
+        self.per_host = per_host or {}
         self._last: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def wait(self, host: str) -> None:
+        interval = self.per_host.get(host, self.min_interval)
         with self._lock:
             last = self._last.get(host, 0.0)
             delta = time.monotonic() - last
-            if delta < self.min_interval:
-                time.sleep(self.min_interval - delta + random.uniform(0, 0.25))
+            if delta < interval:
+                time.sleep(interval - delta + random.uniform(0, interval / 4))
             self._last[host] = time.monotonic()
 
 
-_limiter = RateLimiter(min_interval=float(os.getenv("COATTAIL_MIN_REQUEST_INTERVAL", "1.0")))
+# Die SEC erlaubt ausdruecklich 10 Abrufe pro Sekunde. Fuenf lassen Luft und
+# machen den Form-4-Abruf fuenfmal schneller als die allgemeine Sekunde.
+_limiter = RateLimiter(
+    min_interval=float(os.getenv("COATTAIL_MIN_REQUEST_INTERVAL", "1.0")),
+    per_host={"www.sec.gov": 0.2},
+)
 
 
 class HttpClient:

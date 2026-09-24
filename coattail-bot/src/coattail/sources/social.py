@@ -7,7 +7,9 @@ Die Meldungen sagen, wem man folgen sollte. Die Posts sagen, wann.
 
 Bluesky ist die einzige der grossen Plattformen mit einer wirklich offenen,
 kostenlosen und stabilen Leseschnittstelle. Der Rest braucht entweder Geld
-(X) oder laeuft ueber Umwege (RSS-Spiegel, Mastodon-kompatible Endpunkte).
+(X, pro gelesenem Post) oder laeuft ueber Umwege: Truth Social ueber die
+Mastodon-kompatible Schnittstelle oder ein RSS-Archiv, Pressemitteilungen
+und Verfuegungen ueber RSS.
 """
 
 from __future__ import annotations
@@ -94,8 +96,13 @@ class MastodonApiSource(PostSource):
             headers["Authorization"] = f"Bearer {token}"
         with HttpClient(headers=headers) as client:
             for account in self.options.get("accounts", []):
-                account_id = account.get("id") if isinstance(account, dict) else account
-                label = account.get("handle") if isinstance(account, dict) else str(account)
+                account_id = account.get("id") if isinstance(account, dict) else None
+                label = str(
+                    (account.get("handle") if isinstance(account, dict) else account) or account_id
+                ).lstrip("@")
+                account_id = account_id or self._lookup(client, base, label)
+                if not account_id:
+                    continue
                 url = f"{base}/api/v1/accounts/{account_id}/statuses"
                 try:
                     rows = client.json(url, params={"limit": self.options.get("limit", 40)})
@@ -121,35 +128,102 @@ class MastodonApiSource(PostSource):
                     )
 
 
+    def _lookup(self, client: HttpClient, base: str, handle: str) -> str | None:
+        """Handle zu Konto-ID. Wird einmal pro Prozess nachgeschlagen."""
+        cache: dict[str, str] = self.__dict__.setdefault("_ids", {})
+        if handle in cache:
+            return cache[handle]
+        if handle.isdigit():
+            return handle
+        try:
+            payload = client.json(f"{base}/api/v1/accounts/lookup", params={"acct": handle})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("mastodon: Konto %s nicht aufloesbar: %s", handle, exc)
+            return None
+        account_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
+        if account_id:
+            cache[handle] = account_id
+        return account_id or None
+
+
 class XSource(PostSource):
-    """X/Twitter API v2. Braucht ein bezahltes Kontingent."""
+    """X/Twitter API v2.
+
+    Lesen kostet seit 2026 pro abgerufenem Post (Pay-per-use, kein
+    Gratiskontingent mehr fuer neue Entwickler). Deshalb drei Bremsen: der
+    Abruf fragt nur nach Posts seit dem letzten Lauf (start_time), die
+    Obergrenze pro Konto und Lauf ist klein, und die Kennung eines Kontos wird
+    nur einmal nachgeschlagen und dann im Speicher gehalten.
+
+    In der Konfiguration genuegt der Handle. Die numerische ID ist optional
+    und spart den einmaligen Nachschlag.
+    """
 
     name = "x"
     requires = ("x_bearer_token",)
     BASE = "https://api.twitter.com/2"
 
+    def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        super().__init__(*args, **kwargs)
+        self._ids: dict[str, str] = {}
+
+    def available(self) -> tuple[bool, str]:
+        ok, reason = super().available()
+        if not ok:
+            return ok, reason
+        if not self.options.get("users"):
+            return False, "keine users konfiguriert"
+        return True, "bereit (kostet pro gelesenem Post)"
+
+    def _users(self) -> list[tuple[str | None, str]]:
+        out: list[tuple[str | None, str]] = []
+        for user in self.options.get("users", []):
+            if isinstance(user, str):
+                out.append((None, user.lstrip("@")))
+            elif isinstance(user, dict):
+                handle = str(user.get("handle") or user.get("id") or "").lstrip("@")
+                out.append((str(user["id"]) if user.get("id") else None, handle))
+        return out
+
+    def _resolve(self, client: HttpClient, handle: str) -> str | None:
+        if handle in self._ids:
+            return self._ids[handle]
+        try:
+            payload = client.json(f"{self.BASE}/users/by/username/{handle}")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("x: Konto %s nicht aufloesbar: %s", handle, exc)
+            return None
+        uid = (payload.get("data") or {}).get("id")
+        if uid:
+            self._ids[handle] = str(uid)
+            log.info("x: %s hat die ID %s", handle, uid)
+        return uid
+
     def fetch(self, since: dt.datetime | None = None) -> Iterable[RawPost]:
         headers = {"Authorization": f"Bearer {self.secrets.x_bearer_token}"}
-        users: list[dict] = self.options.get("users", [])
+        # Die Schnittstelle verlangt 5 bis 100 Ergebnisse pro Seite.
+        limit = max(5, min(100, int(self.options.get("limit", 10))))
+        # Ohne Cursor nicht die ganze Historie ziehen, das waere teuer und
+        # fuer Signale ohnehin zu alt.
+        floor = dt.datetime.now(dt.UTC) - dt.timedelta(hours=int(self.options.get("first_run_hours", 6)))
+        start = max(since, floor) if since else floor
         with HttpClient(headers=headers) as client:
-            for user in users:
-                uid = user.get("id")
-                handle = user.get("handle", str(uid))
+            for uid, handle in self._users():
+                uid = uid or self._resolve(client, handle)
                 if not uid:
                     continue
                 params = {
-                    "max_results": self.options.get("limit", 20),
+                    "max_results": limit,
                     "tweet.fields": "created_at,text,entities",
                     "exclude": "retweets,replies",
+                    "start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }
-                if since:
-                    params["start_time"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
                 try:
                     payload = client.json(f"{self.BASE}/users/{uid}/tweets", params=params)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("x %s: %s", handle, exc)
                     continue
-                for row in payload.get("data", []):
+                for row in payload.get("data", []) or []:
                     created = to_utc(row.get("created_at"))
                     if not created:
                         continue
@@ -180,29 +254,43 @@ class RssSource(PostSource):
         return True, "bereit"
 
     def fetch(self, since: dt.datetime | None = None) -> Iterable[RawPost]:
-        for feed in self.options.get("feeds", []):
-            url = feed["url"] if isinstance(feed, dict) else feed
-            label = feed.get("label", url) if isinstance(feed, dict) else url
-            try:
-                parsed = feedparser.parse(url)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("rss %s: %s", label, exc)
+        # Abruf ueber den eigenen Client statt feedparser.parse(url): der hat
+        # kein Zeitlimit, und ein haengender Server wuerde den Job blockieren.
+        headers = {
+            "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.5"
+        }
+        with HttpClient(timeout=20.0, headers=headers) as client:
+            for feed in self.options.get("feeds", []):
+                url = feed["url"] if isinstance(feed, dict) else feed
+                label = feed.get("label", url) if isinstance(feed, dict) else url
+                try:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    parsed = feedparser.parse(resp.content)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("rss %s: %s", label, exc)
+                    continue
+                if not parsed.entries and getattr(parsed, "bozo", False):
+                    log.warning("rss %s: kein gueltiger Feed (%s)", label, parsed.get("bozo_exception"))
+                    continue
+                yield from self._entries(parsed, label, since)
+
+    def _entries(self, parsed, label: str, since: dt.datetime | None) -> Iterable[RawPost]:  # noqa: ANN001
+        for entry in parsed.entries:
+            created = to_utc(entry.get("published") or entry.get("updated"))
+            if not created or (since and created < since):
                 continue
-            for entry in parsed.entries:
-                created = to_utc(entry.get("published") or entry.get("updated"))
-                if not created or (since and created < since):
-                    continue
-                text = _strip_html(entry.get("summary") or entry.get("title") or "")
-                if not text:
-                    continue
-                yield RawPost(
-                    platform=self.name,
-                    external_id=entry.get("id") or entry.get("link") or f"{label}:{created}",
-                    author=label,
-                    text=f"{entry.get('title', '')}\n{text}".strip(),
-                    posted_at=created,
-                    url=entry.get("link"),
-                )
+            text = _strip_html(entry.get("summary") or entry.get("title") or "")
+            if not text:
+                continue
+            yield RawPost(
+                platform=self.name,
+                external_id=entry.get("id") or entry.get("link") or f"{label}:{created}",
+                author=label,
+                text=f"{entry.get('title', '')}\n{text}".strip(),
+                posted_at=created,
+                url=entry.get("link"),
+            )
 
 
 def _strip_html(html: str) -> str:

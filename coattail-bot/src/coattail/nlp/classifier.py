@@ -194,7 +194,7 @@ Regeln:
 class LlmClassifier:
     """Feinauswertung mit der Claude API."""
 
-    def __init__(self, secrets: Secrets, model: str = "claude-opus-5") -> None:
+    def __init__(self, secrets: Secrets, model: str = "claude-sonnet-5") -> None:
         self.model = model
         self.enabled = bool(secrets.anthropic_api_key)
         self._client = None
@@ -260,7 +260,7 @@ class HybridClassifier:
     """Regeln zuerst, Modell als Ergaenzung. Findet beides dasselbe Kuerzel,
     gewinnt die hoehere Ueberzeugung."""
 
-    def __init__(self, secrets: Secrets, model: str = "claude-opus-5", use_llm: bool = True) -> None:
+    def __init__(self, secrets: Secrets, model: str = "claude-sonnet-5", use_llm: bool = True) -> None:
         self.rules = RuleClassifier()
         self.llm = LlmClassifier(secrets, model) if use_llm else None
 

@@ -74,30 +74,26 @@ git clone <dein-repo> coattail && cd coattail
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-cp .env.example .env          # erst mal leer lassen, geht auch ohne
+cp .env.example .env          # COATTAIL_CONTACT eintragen, der Rest ist optional
 coattail doctor               # zeigt, was bereit ist und was fehlt
-coattail bootstrap            # Demodaten laden und alle Personen bewerten
-coattail actors               # die Rangliste mit Begruendung
-coattail why "Dana Solid"     # warum genau diese Person durchfaellt
-coattail run-once             # ein kompletter Durchlauf im Trockenlauf
+coattail probe                # fragt jede Quelle einmal ab, ohne zu speichern
+coattail bootstrap            # echte Historie laden und alle Personen bewerten
+coattail actors --eligible    # wer die Pruefung besteht
+coattail run                  # Dauerbetrieb mit Papierdepot
 ```
 
-Ohne Netzzugang oder fuer einen ersten Blick ohne echte Kurse:
+Die Voreinstellung ist Papierhandel mit echten Daten: echte Meldungen, echte
+Posts, echte Kurse, aber ein simuliertes Depot mit Schlupf und Gebuehren.
+Kostenlos und ohne Registrierung laufen `capitoltrades`, `sec_form4`,
+`federal_register`, `usaspending`, `bluesky`, `truthsocial`, `rss` und
+`hyperliquid`. X kostet pro gelesenem Post und ist deshalb erst einmal aus.
+
+Fuer einen Blick ohne Netz gibt es weiter die Demoquelle. Dazu in der
+Konfiguration `demo` ein- und alle anderen Quellen ausschalten, eine eigene
+Datenbank nehmen und synthetische Kurse erzwingen:
 
 ```bash
 COATTAIL_SYNTHETIC_PRICES=1 coattail bootstrap
-```
-
-Danach die echten Quellen einschalten. In `config/config.yaml` stehen sie alle
-drin, auf `enabled: false`. Kostenlos und ohne Registrierung laufen sofort:
-`stockwatcher`, `capitoltrades`, `sec_form4`, `federal_register`,
-`usaspending`, `bluesky`, `rss`, `hyperliquid`.
-
-```bash
-coattail ingest --source stockwatcher   # Jahre an Historie, dauert
-coattail score                          # alle Personen neu bewerten
-coattail actors --eligible              # wer die Pruefung besteht
-coattail backtest --days 730            # was das Kopieren gebracht haette
 ```
 
 ## Befehle
@@ -105,6 +101,7 @@ coattail backtest --days 730            # was das Kopieren gebracht haette
 | Befehl | Zweck |
 |---|---|
 | `coattail doctor` | Konfiguration, Zugangsdaten, Quellen, Kurse, Datenbank |
+| `coattail probe [--source X]` | jede Quelle einmal abfragen, nichts speichern |
 | `coattail bootstrap` | Erstbefuellung: Historie holen und alle bewerten |
 | `coattail ingest [--source X]` | neue Daten holen |
 | `coattail score` | Personen neu bewerten |

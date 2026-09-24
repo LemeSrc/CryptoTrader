@@ -24,8 +24,10 @@ from tenacity import (
 
 log = logging.getLogger(__name__)
 
-CONTACT = os.getenv("COATTAIL_CONTACT", "coattail-bot (contact: set COATTAIL_CONTACT)")
-USER_AGENT = f"coattail-bot/0.1 {CONTACT}"
+def user_agent() -> str:
+    """Erst beim Aufbau des Clients lesen, damit ein spaet geladenes .env greift."""
+    contact = os.getenv("COATTAIL_CONTACT", "coattail-bot (contact: set COATTAIL_CONTACT)")
+    return f"coattail-bot/0.2 {contact}"
 
 
 class RateLimiter:
@@ -53,7 +55,7 @@ class HttpClient:
         self._client = httpx.Client(
             timeout=timeout,
             follow_redirects=True,
-            headers={"User-Agent": USER_AGENT, **(headers or {})},
+            headers={"User-Agent": user_agent(), **(headers or {})},
         )
 
     @retry(

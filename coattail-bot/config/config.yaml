@@ -1,21 +1,23 @@
 # Coattail: Strategie und Betrieb. Geheimnisse gehoeren in .env, nicht hierher.
 #
-# Voreinstellung ist der Trockenlauf mit Demodaten. So laeuft der Bot sofort,
-# ohne einen einzigen Zugangsschluessel, und zeigt trotzdem jede Entscheidung,
-# die er treffen wuerde. Erst Quellen einschalten, dann Papierhandel, dann echt.
+# Voreinstellung: echte Daten, Papierhandel. Der Bot holt echte Meldungen und
+# Posts, bewertet echte Personen und fuehrt ein simuliertes Depot mit echten
+# Kursen, Schlupf und Gebuehren. Echtes Geld fliesst erst, wenn mode auf live
+# steht und ein Broker hinterlegt ist. Das kommt fruehestens nach mehreren
+# Wochen Papierhandel mit positivem Ergebnis, siehe docs/AUTOMATION.md.
 
 timezone: Europe/Berlin
 database_url: sqlite:///data/coattail.db
 log_level: INFO
 
 execution:
-  mode: dry_run          # dry_run | paper | live
+  mode: paper            # dry_run | paper | live
   broker: paper          # paper | alpaca | ccxt
   exchange_id: binance
   alpaca_paper: true
   order_type: market
   limit_offset_bps: 10
-  max_signal_age_minutes: 2880   # zwei Tage. Aeltere Meldungen sind kalt.
+  max_signal_age_minutes: 4320   # drei Tage. Deckt ein Wochenende ab, aeltere Meldungen sind kalt.
   max_slippage_bps: 40
   trading_hours_only: true
   allow_short: false
@@ -70,9 +72,11 @@ ticker_allowlist: []
 
 sources:
   # ---------------------------------------------------------------- Demo
+  # Nur fuer den ersten Trockenlauf. Nie zusammen mit echten Quellen, die
+  # erfundenen Personen wuerden echte Signale ausloesen.
   - name: demo
     kind: demo
-    enabled: true
+    enabled: false
     poll_seconds: 86400
     options:
       seed: 7
@@ -80,25 +84,27 @@ sources:
       trades_per_actor: 40
 
   # ------------------------------------------------- Kongress, kostenlos
+  - name: capitoltrades
+    kind: capitoltrades
+    enabled: true           # Hauptquelle fuer Abgeordnete, kein Schluessel noetig
+    poll_seconds: 1800      # alle 30 Minuten, Meldungen kommen in Schueben
+    options:
+      mode: auto            # auto: erst JSON-Backend, dann Tabellenseite
+      pages: 3              # pro regulaerem Abruf
+      history_pages: 150    # beim ersten Lauf, reicht fuer rund drei Jahre
+      page_size: 100
+
   - name: stockwatcher
     kind: stockwatcher
-    enabled: false          # beste Basis fuer die Erstbewertung, grosse Datei
+    enabled: false          # Buckets antworten im September 2026 mit 403
     poll_seconds: 21600
     options:
       include_senate: true
 
-  - name: capitoltrades
-    kind: capitoltrades
-    enabled: false          # schnellster kostenloser Feed fuer neue Meldungen
-    poll_seconds: 900
-    options:
-      pages: 3
-      page_size: 100
-
   # ------------------------------------------- Kongress, mit Zugangsdaten
   - name: quiver
     kind: quiver
-    enabled: false
+    enabled: false          # schnellster Feed, kostet ein Abo. Zweite Quelle, sobald es sich lohnt.
     poll_seconds: 600
     options:
       endpoint: /live/congresstrading
@@ -120,8 +126,8 @@ sources:
   # ------------------------------------------------ Insider, sehr schnell
   - name: sec_form4
     kind: sec_form4
-    enabled: false          # Form 4 kommt binnen zwei Tagen statt 45
-    poll_seconds: 600
+    enabled: true           # Form 4 kommt binnen zwei Tagen statt 45. Braucht COATTAIL_CONTACT.
+    poll_seconds: 900
     options:
       count: 100
       min_value_usd: 250000
@@ -175,65 +181,87 @@ sources:
         stop_loss: stopLoss
 
   # ------------------------------------------------------- Posts und Politik
-  - name: bluesky
-    kind: bluesky
-    enabled: false          # einzige grosse Plattform mit offener Leseschnittstelle
-    poll_seconds: 60
-    options:
-      handles: []
-        # - senwarren.bsky.social
-      limit: 40
-
-  - name: mastodon
+  # Truth Social direkt. Laeuft ueber die Mastodon-kompatible Schnittstelle.
+  # Wenn der Bot-Schutz den Server abweist, faengt der RSS-Eintrag weiter
+  # unten dieselben Beitraege auf. Doppelte Signale werden verworfen.
+  - name: truthsocial
     kind: mastodon
-    enabled: false
+    enabled: true
     poll_seconds: 120
     options:
       base_url: https://truthsocial.com
-      accounts: []
-      limit: 40
+      accounts:
+        - {handle: realDonaldTrump}
+      limit: 20
 
+  - name: bluesky
+    kind: bluesky
+    enabled: true           # offene Schnittstelle, kostenlos
+    poll_seconds: 180
+    options:
+      # Nach dem Start mit 'coattail probe --source bluesky' pruefen.
+      # Wer nichts liefert, fliegt raus. Weitere Konten einfach ergaenzen.
+      handles:
+        - fetterman.senate.gov
+        - booker.senate.gov
+        - schiff.senate.gov
+        - aoc.bsky.social
+      limit: 30
+
+  # X kostet seit 2026 pro gelesenem Post, ein Gratiskontingent gibt es fuer
+  # neue Entwickler nicht mehr. Bei fuenf Konten und normalem Posting-Tempo
+  # bleiben das ein paar Dollar im Monat, trotzdem erst einschalten, wenn der
+  # Papierhandel zeigt, dass Posts ueberhaupt etwas bringen.
+  # Einrichten: developer.x.com, App anlegen, Bearer Token in .env als
+  # X_BEARER_TOKEN, dann enabled auf true.
   - name: x
     kind: x
     enabled: false
     poll_seconds: 300
     options:
-      users: []
-        # - {id: "25073877", handle: "realDonaldTrump"}
-      limit: 20
+      users:
+        - realDonaldTrump
+        - elonmusk
+        - WhiteHouse
+      limit: 10             # Obergrenze pro Konto und Abruf, haelt die Kosten klein
+      first_run_hours: 6
 
   - name: rss
     kind: rss
-    enabled: false
+    enabled: true
     poll_seconds: 300
     options:
       feeds:
         - {url: "https://www.whitehouse.gov/presidential-actions/feed/", label: "Weisses Haus"}
+        # Oeffentliches Archiv der Truth-Social-Beitraege von Donald Trump
+        - {url: "https://trumpstruth.org/feed", label: "realDonaldTrump"}
 
   - name: federal_register
     kind: federal_register
-    enabled: false          # Verfuegungen, oft vor der Nachrichtenlage
-    poll_seconds: 900
+    enabled: true           # Verfuegungen, oft vor der Nachrichtenlage
+    poll_seconds: 1800
     options:
       types: [PRESDOCU]
       per_page: 50
 
   - name: usaspending
     kind: usaspending
-    enabled: false          # Grossauftraege des Bundes
+    enabled: true           # Grossauftraege des Bundes
     poll_seconds: 21600
     options:
       min_amount: 100000000
       limit: 50
 
   # Keine Datenquelle, sondern der Schalter fuer die Post-Auswertung.
+  # Ohne ANTHROPIC_API_KEY laeuft nur die Regelstufe, die ist kostenlos und
+  # vorsichtig. Mit Schluessel kommt die Modellstufe dazu.
   - name: posts_to_signals
     kind: none
-    enabled: false
+    enabled: true
     options:
       use_llm: true
-      model: claude-opus-5   # claude-haiku-4-5 ist deutlich guenstiger bei viel Text
-      min_conviction: 0.55
-      max_age_minutes: 180
+      model: claude-sonnet-5   # claude-haiku-4-5 ist guenstiger, claude-opus-5-5 gruendlicher
+      min_conviction: 0.6
+      max_age_minutes: 120
       post_actor_score: 60
       authors: []            # leer heisst: alle beobachteten Konten

@@ -61,10 +61,13 @@ cat <<INFO
 
 Fertig. Naechste Schritte:
 
-  1. $APP_DIR/.env ausfuellen
-  2. $APP_DIR/config/config.yaml pruefen, mode steht auf dry_run
-  3. sudo -u $APP_USER $APP_DIR/.venv/bin/coattail doctor
-  4. sudo systemctl enable --now coattail
-  5. journalctl -u coattail -f
+  1. $APP_DIR/.env ausfuellen, mindestens COATTAIL_CONTACT
+  2. $APP_DIR/config/config.yaml pruefen, mode steht auf paper
+  3. cd $APP_DIR && sudo -u $APP_USER .venv/bin/coattail doctor
+  4. cd $APP_DIR && sudo -u $APP_USER .venv/bin/coattail bootstrap
+  5. sudo systemctl enable --now coattail
+  6. journalctl -u coattail -f
+
+Spaetere Updates: sudo bash deploy/update.sh (aus dem geklonten Repo)
 
 INFO

@@ -27,15 +27,33 @@ SYNTHETIC = os.getenv("COATTAIL_SYNTHETIC_PRICES", "").lower() in ("1", "true", 
 
 CACHE_DIR = Path("data/prices")
 BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
+BINANCE_TICKER = "https://api.binance.com/api/v3/ticker/price"
 STOOQ = "https://stooq.com/q/d/l/"
 
 
 class PriceProvider:
-    def __init__(self, cache_dir: Path | str = CACHE_DIR, max_age_hours: float = 12.0) -> None:
+    """Tagesreihen fuer die Bewertung, Live-Kurse fuer Orders und Stops.
+
+    Der Dienst laeuft wochenlang am Stueck. Ein Speicher-Cache ohne Ablauf
+    wuerde deshalb ab dem zweiten Tag mit Kursen von gestern rechnen, Stops
+    verpassen und Papierorders zu alten Preisen fuellen. Deshalb verfaellt
+    alles: Tagesreihen nach mem_ttl, Live-Kurse nach quote_ttl.
+    """
+
+    def __init__(
+        self,
+        cache_dir: Path | str = CACHE_DIR,
+        max_age_hours: float = 12.0,
+        mem_ttl_minutes: float = 60.0,
+        quote_ttl_seconds: float = 60.0,
+    ) -> None:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_age = dt.timedelta(hours=max_age_hours)
-        self._mem: dict[str, pd.Series] = {}
+        self.mem_ttl = dt.timedelta(minutes=mem_ttl_minutes)
+        self.quote_ttl = dt.timedelta(seconds=quote_ttl_seconds)
+        self._mem: dict[str, tuple[dt.datetime, pd.Series]] = {}
+        self._quotes: dict[str, tuple[dt.datetime, float]] = {}
 
     # ------------------------------------------------------------------ Cache
     def _cache_path(self, symbol: str, asset_class: str) -> Path:
@@ -65,12 +83,14 @@ class PriceProvider:
         self, symbol: str, *, asset_class: str = "equity", years: float = 4.0
     ) -> pd.Series | None:
         key = f"{asset_class}:{symbol}"
-        if key in self._mem:
-            return self._mem[key]
+        now = dt.datetime.now(dt.UTC)
+        hit = self._mem.get(key)
+        if hit and now - hit[0] < self.mem_ttl:
+            return hit[1]
         path = self._cache_path(symbol, asset_class)
         cached = self._read_cache(path)
         if cached is not None and not cached.empty:
-            self._mem[key] = cached
+            self._mem[key] = (now, cached)
             return cached
 
         if SYNTHETIC:
@@ -84,7 +104,7 @@ class PriceProvider:
         if series is None or series.empty:
             return None
         series = series[~series.index.duplicated(keep="last")].sort_index()
-        self._mem[key] = series
+        self._mem[key] = (now, series)
         if not SYNTHETIC:
             self._write_cache(path, series)
         return series
@@ -160,10 +180,49 @@ class PriceProvider:
         return float(window.iloc[-1])
 
     def last_price(self, symbol: str, *, asset_class: str = "equity") -> float | None:
+        """Aktueller Kurs. Live, wenn erreichbar, sonst letzter Tagesschluss."""
+        live = self.quote(symbol, asset_class=asset_class)
+        if live:
+            return live
         series = self.history(symbol, asset_class=asset_class)
         if series is None or series.empty:
             return None
         return float(series.iloc[-1])
+
+    def quote(self, symbol: str, *, asset_class: str = "equity") -> float | None:
+        if SYNTHETIC:
+            return None
+        key = f"{asset_class}:{symbol}"
+        now = dt.datetime.now(dt.UTC)
+        hit = self._quotes.get(key)
+        if hit and now - hit[0] < self.quote_ttl:
+            return hit[1]
+        price = self._crypto_quote(symbol) if asset_class == "crypto" else self._equity_quote(symbol)
+        if price and price > 0:
+            self._quotes[key] = (now, price)
+            return price
+        return None
+
+    def _equity_quote(self, symbol: str) -> float | None:
+        """Laufender Kurs von Yahoo. Ausserhalb der Handelszeit der letzte Schluss."""
+        try:
+            import yfinance as yf
+
+            value = yf.Ticker(symbol).fast_info.last_price
+            return float(value) if value else None
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Live-Kurs %s: %s", symbol, exc)
+            return None
+
+    def _crypto_quote(self, symbol: str) -> float | None:
+        pair = symbol if symbol.endswith(("USDT", "USDC", "USD")) else f"{symbol}USDT"
+        try:
+            with HttpClient() as client:
+                payload = client.json(BINANCE_TICKER, params={"symbol": pair})
+            return float(payload["price"])
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Binance-Kurs %s: %s", pair, exc)
+            return None
 
     def forward_return(
         self,

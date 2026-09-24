@@ -64,6 +64,11 @@ class Source(ABC):
         self.secrets = secrets
         self.options = source_config.options
         self.source_config = source_config
+        # Der Name aus der Konfiguration gewinnt. So kann dieselbe Quellenart
+        # mehrfach laufen (etwa Truth Social und ein Mastodon-Server), jede mit
+        # eigenem Cursor und eigenem Takt.
+        if source_config.name:
+            self.name = source_config.name
 
     def available(self) -> tuple[bool, str]:
         missing = [key for key in self.requires if not self.secrets.has(key)]

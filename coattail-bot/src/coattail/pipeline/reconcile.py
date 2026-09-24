@@ -64,12 +64,16 @@ def _check_exits(broker: PaperBroker, prices: PriceProvider) -> dict[str, int]:
             )
         )
         targets = [
-            (p.symbol, p.quantity, p.stop_loss, p.take_profit)
+            (p.symbol, p.asset_class or "equity", p.quantity, p.stop_loss, p.take_profit)
             for p in open_positions
         ]
 
-    for symbol, qty, stop, take in targets:
-        last = prices.last_price(symbol)
+    for symbol, asset_class, qty, stop, take in targets:
+        # Ausserhalb der Handelszeit gibt es keinen neuen Kurs und keine
+        # Fuellung. Ein Stop wird dann zur Eroeffnung geprueft, wie beim Broker.
+        if not broker.is_market_open(asset_class):
+            continue
+        last = prices.last_price(symbol, asset_class=asset_class)
         if not last:
             continue
         long = qty > 0

@@ -13,6 +13,7 @@ import logging
 from sqlalchemy import select
 
 from ..db import session_scope
+from ..market import us_market_open
 from ..models import EquitySnapshot, Position
 from ..prices import PriceProvider
 from .base import Broker, BrokerPosition, OrderRequest, OrderResult
@@ -47,25 +48,38 @@ class PaperBroker(Broker):
         fee = fill * order.quantity * self.fee_bps / 10_000
 
         with session_scope() as session:
+            # Eine Zeile pro Titel und Broker. Nach einem Stop wird dieselbe
+            # Zeile wieder geoeffnet, der realisierte Gewinn bleibt stehen und
+            # zaehlt weiter zum Kapital.
             pos = session.scalar(
                 select(Position).where(
                     Position.symbol == order.symbol,
                     Position.broker == self.name,
-                    Position.closed_at.is_(None),
                 )
             )
             signed = direction * order.quantity
+            actor = str(order.meta.get("actor", ""))
             if pos is None:
                 pos = Position(
                     symbol=order.symbol,
                     broker=self.name,
+                    asset_class=order.asset_class,
                     quantity=signed,
                     avg_price=fill,
                     stop_loss=order.stop_loss,
                     take_profit=order.take_profit,
-                    source_actors=[str(order.meta.get("actor", ""))],
+                    source_actors=[actor] if actor else [],
                 )
                 session.add(pos)
+            elif pos.closed_at is not None or abs(pos.quantity) < 1e-12:
+                pos.closed_at = None
+                pos.opened_at = dt.datetime.now(dt.UTC)
+                pos.asset_class = order.asset_class
+                pos.quantity = signed
+                pos.avg_price = fill
+                pos.stop_loss = order.stop_loss
+                pos.take_profit = order.take_profit
+                pos.source_actors = [actor] if actor else []
             else:
                 new_qty = pos.quantity + signed
                 if pos.quantity * signed > 0:  # aufstocken
@@ -85,9 +99,10 @@ class PaperBroker(Broker):
                     pos.stop_loss = order.stop_loss
                 if order.take_profit:
                     pos.take_profit = order.take_profit
-                actor = str(order.meta.get("actor", ""))
                 if actor and actor not in (pos.source_actors or []):
                     pos.source_actors = [*(pos.source_actors or []), actor]
+            # Gebuehren mindern das Ergebnis sofort, auch beim Einstieg.
+            pos.realized_pnl = (pos.realized_pnl or 0.0) - fee
             session.flush()
 
         log.info(
@@ -103,6 +118,11 @@ class PaperBroker(Broker):
             message="simuliert",
         )
 
+    def is_market_open(self, asset_class: str = "equity") -> bool:
+        if asset_class == "crypto":
+            return True
+        return us_market_open()
+
     def positions(self) -> list[BrokerPosition]:
         out: list[BrokerPosition] = []
         with session_scope() as session:
@@ -111,7 +131,10 @@ class PaperBroker(Broker):
                     Position.broker == self.name, Position.closed_at.is_(None)
                 )
             ):
-                last = self.prices.last_price(pos.symbol) or pos.avg_price
+                last = (
+                    self.prices.last_price(pos.symbol, asset_class=pos.asset_class or "equity")
+                    or pos.avg_price
+                )
                 out.append(
                     BrokerPosition(
                         symbol=pos.symbol,
@@ -144,12 +167,14 @@ class PaperBroker(Broker):
                 return OrderResult(False, message="keine offene Position")
             qty = abs(pos.quantity)
             side = "sell" if pos.quantity > 0 else "buy"
+            asset_class = pos.asset_class or "equity"
         return self.submit(
             OrderRequest(
                 client_order_id=f"close-{symbol}-{int(dt.datetime.now(dt.UTC).timestamp())}",
                 symbol=symbol,
                 side=side,
                 quantity=qty,
+                asset_class=asset_class,
             )
         )
 

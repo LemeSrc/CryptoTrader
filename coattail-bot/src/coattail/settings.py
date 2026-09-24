@@ -43,6 +43,34 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = _find_default_config()
 
 
+def _load_env_file() -> None:
+    """.env auch in os.environ laden, nicht nur in die Secrets-Klasse.
+
+    Einige Einstellungen werden direkt aus der Umgebung gelesen, allen voran
+    COATTAIL_CONTACT fuer den User-Agent. Die SEC sperrt Abrufe ohne echte
+    Kontaktadresse. Unter systemd kommt die Datei ueber EnvironmentFile ohnehin
+    an, beim Aufruf von Hand aus /opt/coattail aber nur ueber diesen Weg.
+    Bereits gesetzte Variablen gewinnen immer.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover - kommt mit pydantic-settings
+        return
+    for candidate in (
+        Path(os.getenv("COATTAIL_ENV_FILE", ".env")),
+        Path("/opt/coattail/.env"),
+    ):
+        try:
+            if candidate.is_file():
+                load_dotenv(candidate, override=False)
+                return
+        except OSError:  # keine Leserechte, etwa als anderer Benutzer
+            continue
+
+
+_load_env_file()
+
+
 class Secrets(BaseSettings):
     """Alles, was nicht ins Repo darf."""
 

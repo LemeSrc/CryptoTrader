@@ -2,6 +2,9 @@
 Description=Coattail Copy-Trading Bot
 After=network-online.target
 Wants=network-online.target
+# Nach zu vielen Fehlstarts stehenbleiben, statt in einer Schleife zu haengen.
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -10,11 +13,12 @@ Group=coattail
 WorkingDirectory=/opt/coattail
 EnvironmentFile=/opt/coattail/.env
 ExecStart=/opt/coattail/.venv/bin/coattail run
+Environment=PYTHONUNBUFFERED=1
+# Das Home-Verzeichnis ist unten gesperrt. yfinance legt seinen Cache sonst
+# dort ab und laeuft ohne ihn deutlich langsamer.
+Environment=XDG_CACHE_HOME=/opt/coattail/data/.cache
 Restart=always
 RestartSec=10
-# Nach zu vielen Fehlstarts stehenbleiben, statt in einer Schleife zu haengen
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 # Ein Handelsbot braucht Netz, eine Datenbankdatei und sonst nichts.
 NoNewPrivileges=true

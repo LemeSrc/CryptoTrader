@@ -1,12 +1,13 @@
 """Der Taktgeber des Dauerbetriebs.
 
-Unterschiedliche Daten altern unterschiedlich schnell, deshalb unterschiedliche
-Intervalle:
+Unterschiedliche Daten altern unterschiedlich schnell, deshalb hat jede
+Quelle ihr eigenes Intervall (poll_seconds in der Konfiguration):
 
-  Posts        jede Minute. Der Vorsprung gegenueber der Nachrichtenlage ist
-               die einzige Rechtfertigung, sie ueberhaupt auszuwerten.
-  Meldungen    alle 15 Minuten. Sie erscheinen in Schueben, schneller bringt
-               nichts ausser Last auf fremden Servern.
+  Posts        ein bis fuenf Minuten. Der Vorsprung gegenueber der
+               Nachrichtenlage ist die einzige Rechtfertigung, sie ueberhaupt
+               auszuwerten.
+  Meldungen    zehn Minuten bis sechs Stunden. Sie erscheinen in Schueben,
+               schneller bringt nichts ausser Last auf fremden Servern.
   Abgleich     alle 5 Minuten. Stops sollen nicht bis zum naechsten Abruf warten.
   Bewertung    einmal taeglich nachts. Die Kennzahlen aendern sich nicht
                stuendlich, und der Lauf zieht viele Kursreihen.
@@ -17,6 +18,7 @@ verpassten Laeufe auf einmal nachgeholt werden.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -25,9 +27,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .app import App
 from .pipeline.execute import execute_pending
-from .pipeline.ingest import ingest_all
+from .pipeline.ingest import ingest_source
 from .pipeline.reconcile import reconcile
 from .pipeline.signals import build_signals
+from .sources.registry import build_enabled_sources
 from .tasks import daily_report, rescore_all
 
 log = logging.getLogger(__name__)
@@ -37,33 +40,31 @@ def build_scheduler(app: App) -> BackgroundScheduler:
     sched = BackgroundScheduler(timezone=app.config.timezone)
     cfg = app.config
 
+    # Jede Quelle bekommt ihren eigenen Takt aus poll_seconds. Frueher liefen
+    # alle Meldungsquellen im Takt der schnellsten mit, dann holte etwa
+    # usaspending alle zehn Minuten dieselben Grossauftraege ab, obwohl sechs
+    # Stunden eingestellt waren. Unhoeflich gegenueber fremden Servern und
+    # bei bezahlten Schnittstellen wie X schlicht teuer.
+    sources = build_enabled_sources(cfg, app.secrets)
+    for index, source in enumerate(sources):
+        seconds = max(30, int(source.source_config.poll_seconds))
+        sched.add_job(
+            ingest_source,
+            IntervalTrigger(seconds=seconds, jitter=min(30, seconds // 10)),
+            args=[source],
+            id=f"ingest:{source.name}",
+            max_instances=1,
+            misfire_grace_time=max(60, seconds // 2),
+            # Erster Lauf kurz nach dem Start, gestaffelt statt alle auf einmal.
+            next_run_time=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=10 + index * 5),
+        )
+        log.info("Quelle %s alle %d Sekunden", source.name, seconds)
+
     post_interval = min(
-        (s.poll_seconds for s in cfg.enabled_sources() if s.kind in ("bluesky", "x", "mastodon", "rss")),
+        (int(s.source_config.poll_seconds) for s in sources if s.kind == "post"),
         default=300,
     )
-    disc_interval = min(
-        (
-            s.poll_seconds
-            for s in cfg.enabled_sources()
-            if s.kind not in ("bluesky", "x", "mastodon", "rss")
-        ),
-        default=900,
-    )
 
-    sched.add_job(
-        lambda: ingest_all(cfg, app.secrets, kinds=("post",)),
-        IntervalTrigger(seconds=post_interval),
-        id="ingest_posts",
-        max_instances=1,
-        misfire_grace_time=60,
-    )
-    sched.add_job(
-        lambda: ingest_all(cfg, app.secrets, kinds=("disclosure",)),
-        IntervalTrigger(seconds=disc_interval),
-        id="ingest_disclosures",
-        max_instances=1,
-        misfire_grace_time=300,
-    )
     sched.add_job(
         lambda: build_signals(cfg, app.secrets),
         IntervalTrigger(seconds=max(60, post_interval)),
@@ -94,7 +95,7 @@ def build_scheduler(app: App) -> BackgroundScheduler:
     )
     sched.add_job(
         lambda: daily_report(app),
-        CronTrigger(hour=cfg.notify.daily_summary_hour_utc, minute=5),
+        CronTrigger(hour=cfg.notify.daily_summary_hour_utc, minute=5, timezone="UTC"),
         id="daily_report",
         max_instances=1,
         misfire_grace_time=3600,

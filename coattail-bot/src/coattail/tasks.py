@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 
 from sqlalchemy import func, select
 
@@ -16,6 +17,7 @@ log = logging.getLogger(__name__)
 
 
 RESCORE_STATE = "rescore"
+_RESCORE_LOCK = threading.Lock()
 
 
 def _prefetch_prices(app: App, actor_ids: list[int]) -> None:
@@ -48,8 +50,20 @@ def rescore_all(app: App, only_source: str | None = None) -> dict[str, int]:
 
     Laeuft nachts, weil dabei viele Kursreihen geladen werden. Der Cache im
     Kursanbieter sorgt dafuer, dass gaengige Titel nur einmal geholt werden.
+    Nie zweimal gleichzeitig: ein zweiter Aufruf waehrend eines Laufs kehrt
+    sofort zurueck.
     """
     out = {"bewertet": 0, "geeignet": 0}
+    if not _RESCORE_LOCK.acquire(blocking=False):
+        log.info("Bewertung laeuft bereits, dieser Aufruf entfaellt")
+        return out
+    try:
+        return _rescore_all(app, only_source, out)
+    finally:
+        _RESCORE_LOCK.release()
+
+
+def _rescore_all(app: App, only_source: str | None, out: dict[str, int]) -> dict[str, int]:
     with session_scope() as session:
         stmt = select(Actor.id).where(Actor.active.is_(True))
         if only_source:
@@ -61,6 +75,16 @@ def rescore_all(app: App, only_source: str | None = None) -> dict[str, int]:
     # Datenbank fuer die gesamte Laufzeit sperren, und die Quellen, die
     # parallel schreiben wollen, liefen in 'database is locked'.
     for actor_id in actor_ids:
+        if _prices_blocked(app):
+            # Mit Luecken in den Kursen kaemen falsche Noten heraus, und die
+            # wuerden bis zum naechsten Lauf ueber das Kopieren entscheiden.
+            log.warning(
+                "Bewertung angehalten nach %d von %d Personen, weil die Kursquelle drosselt. "
+                "Neuer Versuch in einer Stunde.",
+                out["bewertet"], len(actor_ids),
+            )
+            out["abgebrochen"] = 1
+            return out
         name = str(actor_id)
         try:
             with session_scope() as session:
@@ -86,6 +110,12 @@ def rescore_all(app: App, only_source: str | None = None) -> dict[str, int]:
                 {"finished_at": dt.datetime.now(dt.UTC).isoformat(), **out},
             )
     return out
+
+
+def _prices_blocked(app: App) -> bool:
+    blocked = getattr(app.prices, "yahoo_blocked", None)
+    uses_alpaca = getattr(app.prices, "uses_alpaca", False)
+    return bool(blocked and not uses_alpaca and blocked())
 
 
 def daily_report(app: App) -> list[str]:

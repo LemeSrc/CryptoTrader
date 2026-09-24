@@ -65,10 +65,12 @@ def doctor(config: str = typer.Option(None, "--config", "-c")) -> None:
         table.add_row(sc.name, "bereit" if ok else "blockiert", reason)
 
     price = ctx.prices.last_price(cfg.scoring.benchmark)
+    source = "Alpaca" if ctx.prices.uses_alpaca else "Yahoo"
     table.add_row(
         "Kursdaten",
         "ok" if price else "Fehler",
-        f"{cfg.scoring.benchmark} bei {price:.2f}" if price else "kein Kurs abrufbar",
+        f"{cfg.scoring.benchmark} bei {price:.2f} ueber {source}" if price
+        else f"kein Kurs abrufbar ueber {source}",
     )
     table.add_row(
         "Benachrichtigung",

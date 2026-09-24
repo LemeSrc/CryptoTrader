@@ -93,16 +93,17 @@ def build_scheduler(app: App) -> BackgroundScheduler:
         max_instances=1,
         misfire_grace_time=3600,
     )
+    # Nachholen, wenn kein vollstaendiger Lauf vorliegt: frische Datenbank,
+    # Abbruch durch Neustart oder eine gedrosselte Kursquelle. Prueft stuendlich,
+    # der erste Blick nach 20 Minuten laesst den Quellen Zeit fuer die Historie.
+    sched.add_job(
+        lambda: _catch_up_rescore(app),
+        IntervalTrigger(minutes=60, start_date=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=20)),
+        id="rescore_catchup",
+        max_instances=1,
+        misfire_grace_time=600,
+    )
     if not _scores_fresh():
-        # Frische Datenbank oder lange Pause: nicht bis zur Nacht warten. Die
-        # Verzoegerung laesst den Quellen Zeit, die Historie erst zu laden.
-        sched.add_job(
-            lambda: rescore_all(app),
-            "date",
-            run_date=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=20),
-            id="rescore_initial",
-            misfire_grace_time=3600,
-        )
         log.info("Keine aktuelle Bewertung vorhanden, erster Lauf in 20 Minuten")
     sched.add_job(
         lambda: daily_report(app),
@@ -112,6 +113,11 @@ def build_scheduler(app: App) -> BackgroundScheduler:
         misfire_grace_time=3600,
     )
     return sched
+
+
+def _catch_up_rescore(app: App) -> None:
+    if not _scores_fresh():
+        rescore_all(app)
 
 
 def _scores_fresh(max_age_hours: float = 36.0) -> bool:

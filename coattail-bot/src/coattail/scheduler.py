@@ -115,15 +115,19 @@ def build_scheduler(app: App) -> BackgroundScheduler:
 
 
 def _scores_fresh(max_age_hours: float = 36.0) -> bool:
-    from sqlalchemy import func, select
+    """Gab es in den letzten Stunden einen vollstaendig abgeschlossenen Lauf?
 
-    from .db import session_scope
-    from .models import ActorStat
+    Einzelne Bewertungen reichen nicht als Nachweis. Wird der Dienst mitten
+    in einer Bewertung neu gestartet, stehen ein paar Personen frisch in der
+    Datenbank und der Rest gar nicht.
+    """
+    from .db import get_state, session_scope
+    from .tasks import RESCORE_STATE
+    from .util import to_utc
 
     with session_scope() as session:
-        newest = session.scalar(select(func.max(ActorStat.computed_at)))
-    if newest is None:
+        state = get_state(session, RESCORE_STATE, {}) or {}
+    finished = to_utc(state.get("finished_at")) if state.get("finished_at") else None
+    if finished is None:
         return False
-    if newest.tzinfo is None:
-        newest = newest.replace(tzinfo=dt.UTC)
-    return dt.datetime.now(dt.UTC) - newest < dt.timedelta(hours=max_age_hours)
+    return dt.datetime.now(dt.UTC) - finished < dt.timedelta(hours=max_age_hours)

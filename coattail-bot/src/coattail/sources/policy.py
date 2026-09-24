@@ -49,7 +49,7 @@ class FederalRegisterSource(PostSource):
                 "document_number",
                 "publication_date",
                 "html_url",
-                "presidential_document_type",
+                "subtype",  # Executive Order, Proclamation, Memorandum ...
                 "type",
                 "agencies",
             ],
@@ -62,10 +62,16 @@ class FederalRegisterSource(PostSource):
                 except Exception as exc:  # noqa: BLE001
                     log.warning("federal register: %s", exc)
                     continue
+            today = dt.datetime.now(dt.UTC).date()
             for row in payload.get("results", []):
                 published = to_utc(row.get("publication_date"))
                 if not published:
                     continue
+                # Das Amtsblatt kennt nur den Tag. Mitternacht als Zeitstempel
+                # waere fuer die Post-Auswertung immer schon Stunden alt, also
+                # zaehlt bei heutigen Dokumenten der Moment des ersten Abrufs.
+                if published.date() == today:
+                    published = dt.datetime.now(dt.UTC)
                 agencies = ", ".join(a.get("name", "") for a in row.get("agencies", []) or [])
                 text = "\n".join(
                     part for part in [row.get("title"), row.get("abstract"), agencies] if part
@@ -73,7 +79,7 @@ class FederalRegisterSource(PostSource):
                 yield RawPost(
                     platform=self.name,
                     external_id=row.get("document_number", ""),
-                    author=row.get("presidential_document_type") or row.get("type") or "federal_register",
+                    author=row.get("subtype") or row.get("type") or "federal_register",
                     text=text,
                     posted_at=published,
                     url=row.get("html_url"),

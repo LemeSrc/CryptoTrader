@@ -50,10 +50,16 @@ Papierhandel. Ein Durchlauf mit Demodaten ist nur noch fuer Tests gedacht.
 
 ## Phase 2: Echte Quellen pruefen und Historie laden (ein Abend)
 
-Eingeschaltet sind ab Werk: `capitoltrades` (Abgeordnete), `sec_form4`
-(Insiderkaeufe), `truthsocial` und `rss` (Beitraege von Donald Trump,
-Verfuegungen des Weissen Hauses), `bluesky` (einige Abgeordnete),
-`federal_register` und `usaspending`. Alle kostenlos, alle ohne Registrierung.
+Eingeschaltet sind ab Werk: `house_ptr` und `senate_ptr` (amtliche
+Meldungen beider Kammern ueber einen taeglichen Spiegel auf GitHub),
+`sec_form4` (Insiderkaeufe), `rss` (Beitraege von Donald Trump ueber das
+Archiv trumpstruth.org, Verfuegungen des Weissen Hauses), `bluesky` (einige
+Abgeordnete), `federal_register` und `usaspending`. Alle kostenlos, alle
+ohne Registrierung.
+
+Aus, weil vom Rechenzentrum aus gesperrt: `capitoltrades` (Bot-Pruefung),
+`truthsocial` direkt (Cloudflare) und die Senatsseite selbst (nur aus den
+USA erreichbar, deshalb der Spiegel).
 
 Zuerst schauen, was vom eigenen Server aus tatsaechlich ankommt:
 
@@ -71,6 +77,9 @@ beiseite, sonst stehen erfundene Personen in der Rangliste:
 mv data/coattail.db data/coattail.db.demo
 coattail bootstrap        # holt rund drei Jahre Kongressmeldungen, dauert
 ```
+
+Alternativ einfach den Dienst starten. Findet er keine aktuelle Bewertung,
+laedt er die Historie selbst und bewertet 20 Minuten nach dem Start.
 
 `stockwatcher`, frueher die ergiebigste Gratisquelle, antwortet im September
 2026 nur noch mit 403 und ist deshalb aus.

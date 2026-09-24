@@ -6,7 +6,9 @@ Person, Ticker, Richtung und Handelsdatum, deshalb kostet Redundanz nichts
 ausser ein paar Requests.
 
 Reihenfolge nach Nuetzlichkeit:
-  capitoltrades  kostenlos, schnell, JSON-Backend oder Tabellenseite
+  house_ptr      amtliche Meldungen des Repraesentantenhauses, taeglicher Spiegel
+  senate_ptr     amtliche Meldungen des Senats, taeglicher Spiegel
+  capitoltrades  kostenlos, aber hinter einem Bot-Schutz (429/503 vom Server)
   quiver         bezahlt, sehr schnell, sauber strukturiert
   finnhub / fmp  Fallback mit kostenlosem Kontingent
   stockwatcher   frueher die beste Gratis-Historie, die Buckets antworten
@@ -305,6 +307,230 @@ def _ct_size(text: str) -> tuple[float | None, float | None]:
     if not vals:
         return None, None
     return min(vals), max(vals)
+
+
+class _MirrorCsvSource(DisclosureSource):
+    """Gemeinsame Basis fuer die amtlichen Meldungen ueber einen Tagesspiegel.
+
+    Die Rohdaten sind amtlich (House Clerk, Senate eFD), aber nicht direkt
+    nutzbar: das Haus veroeffentlicht PDFs, und die Senatsseite sperrt
+    Zugriffe von ausserhalb der USA. Offene Projekte auf GitHub lesen beides
+    taeglich aus und legen es als CSV ab, mit Verweis auf das Originaldokument
+    in jeder Zeile. Von GitHub laesst es sich weltweit abrufen.
+
+    Spiegel melden Einreichungen oft ein, zwei Tage nach dem amtlichen Datum.
+    Deshalb schaut jeder Abruf relist_days hinter den Cursor zurueck, sonst
+    ginge eine spaet gespiegelte Meldung verloren. Doppelte faengt die
+    Pipeline ueber den Fingerprint ab.
+    """
+
+    kind = "disclosure"
+
+    def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        super().__init__(*args, **kwargs)
+        self._etag_cache: dict[str, tuple[str, str]] = {}
+
+    def available(self) -> tuple[bool, str]:
+        return True, "bereit (kein Key noetig)"
+
+    def _window_start(self, since: dt.datetime | None) -> dt.date:
+        if since is None:
+            days = int(self.options.get("history_days", self.config.scoring.lookback_days))
+            return dt.datetime.now(dt.UTC).date() - dt.timedelta(days=days)
+        return since.date() - dt.timedelta(days=int(self.options.get("relist_days", 14)))
+
+    def _get_text(self, client: HttpClient, url: str) -> str:
+        """Mit ETag, damit ein unveraenderter Spiegel nicht jedes Mal
+        komplett neu geladen wird."""
+        headers = {}
+        cached = self._etag_cache.get(url)
+        if cached:
+            headers["If-None-Match"] = cached[0]
+        resp = client.get(url, headers=headers)
+        if resp.status_code == 304 and cached:
+            return cached[1]
+        resp.raise_for_status()
+        text = resp.text
+        etag = resp.headers.get("ETag")
+        if etag:
+            self._etag_cache[url] = (etag, text)
+        return text
+
+
+class HousePtrSource(_MirrorCsvSource):
+    """Repraesentantenhaus: Periodic Transaction Reports.
+
+    Transaktionen aus dem Spiegel, Einreichungsdatum aus dem amtlichen
+    Jahresindex des House Clerk (FilingType P). Ohne Einreichungsdatum keine
+    Zeile, denn bewertet wird ab dem Tag, an dem die Meldung oeffentlich war.
+    """
+
+    name = "house_ptr"
+    TRANSACTIONS = (
+        "https://raw.githubusercontent.com/StrokeOfLuck/house-ptr-scraper/main/"
+        "data/06_public/house_ptr_transactions_web.csv"
+    )
+    INDEX = (
+        "https://raw.githubusercontent.com/StrokeOfLuck/house-ptr-scraper/main/"
+        "data/02_xml_indexes/{year}FD.xml"
+    )
+    ASSET_TYPES = {"ST": None, "ET": None, "OP": "option"}
+
+    def fetch(self, since: dt.datetime | None = None) -> Iterable[RawTrade]:
+        start = self._window_start(since)
+        today = dt.datetime.now(dt.UTC).date()
+        with HttpClient(timeout=120.0) as client:
+            filed: dict[str, dt.date] = {}
+            for year in range(start.year, today.year + 1):
+                url = self.options.get("index_url", self.INDEX).format(year=year)
+                try:
+                    filed.update(self.parse_index(self._get_text(client, url)))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("house_ptr Index %d nicht abrufbar: %s", year, exc)
+            if not filed:
+                return
+            try:
+                text = self._get_text(client, self.options.get("url", self.TRANSACTIONS))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("house_ptr Transaktionen nicht abrufbar: %s", exc)
+                return
+        yield from self.parse_csv(text, filed, start)
+
+    @staticmethod
+    def parse_index(xml_text: str) -> dict[str, dt.date]:
+        """DocID zu Einreichungsdatum, nur Periodic Transaction Reports."""
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_text.lstrip("\ufeff").encode("utf-8"))
+        out: dict[str, dt.date] = {}
+        for member in root.iter("Member"):
+            if (member.findtext("FilingType") or "").strip() != "P":
+                continue
+            doc_id = (member.findtext("DocID") or "").strip()
+            filed = to_date(member.findtext("FilingDate"))
+            if doc_id and filed:
+                out[doc_id] = filed
+        return out
+
+    def parse_csv(
+        self, text: str, filed: dict[str, dt.date], start: dt.date
+    ) -> Iterator[RawTrade]:
+        import csv
+        import io
+
+        skipped = 0
+        for row in csv.DictReader(io.StringIO(text)):
+            if str(row.get("needs_review", "")).lower() == "true":
+                continue
+            if (row.get("filing_status") or "").startswith("Deleted"):
+                continue
+            asset_type = (row.get("asset_type") or "").strip().upper()
+            if asset_type not in self.ASSET_TYPES:
+                continue
+            filed_on = filed.get((row.get("filing_id") or "").strip())
+            if filed_on is None:
+                skipped += 1
+                continue
+            if filed_on < start:
+                continue
+            side = normalize_side(row.get("transaction_type"))
+            tx_date = to_date(row.get("transaction_date"))
+            name = (row.get("politician") or "").strip()
+            # Fehlgelesene Jahreszahlen (etwa 3031) und Handelstage nach der
+            # Einreichung sind Parserfehler, keine Trades.
+            if not side or not tx_date or not name or tx_date > filed_on:
+                continue
+            if (filed_on - tx_date).days > 400:
+                continue
+            yield RawTrade(
+                source=self.name,
+                external_actor_id=name,
+                actor_name=name,
+                symbol=clean_symbol(row.get("ticker_v8_2_cleaned")),
+                side=side,
+                transaction_date=tx_date,
+                disclosed_at=to_utc(filed_on),
+                amount_low=_num(row.get("amount_min")),
+                amount_high=_num(row.get("amount_max")),
+                chamber="house",
+                state=(row.get("state_district") or "")[:2] or None,
+                option_type=self.ASSET_TYPES[asset_type],
+                raw={
+                    "filing_id": row.get("filing_id"),
+                    "owner": row.get("owner"),
+                    "asset": row.get("asset_v8_2_cleaned"),
+                    "pdf": row.get("original_pdf_url"),
+                },
+            )
+        if skipped:
+            log.debug("house_ptr: %d Zeilen ohne Einreichungsdatum im Index", skipped)
+
+
+class SenatePtrSource(_MirrorCsvSource):
+    """Senat: elektronische Periodic Transaction Reports aus dem eFD-System.
+
+    Papiermeldungen (eingescannte Formulare) fehlen, das ist ein kleiner
+    Teil und betrifft vor allem wenige Senatoren.
+    """
+
+    name = "senate_ptr"
+    TRANSACTIONS = (
+        "https://raw.githubusercontent.com/StrokeOfLuck/senate-ptr-scraper/main/"
+        "data/03_transactions/senate_ptr_transactions_electronic.csv"
+    )
+    ASSET_TYPES = {"stock": None, "stock option": "option"}
+
+    def fetch(self, since: dt.datetime | None = None) -> Iterable[RawTrade]:
+        start = self._window_start(since)
+        with HttpClient(timeout=120.0) as client:
+            try:
+                text = self._get_text(client, self.options.get("url", self.TRANSACTIONS))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("senate_ptr nicht abrufbar: %s", exc)
+                return
+        yield from self.parse_csv(text, start)
+
+    def parse_csv(self, text: str, start: dt.date) -> Iterator[RawTrade]:
+        import csv
+        import io
+
+        for row in csv.DictReader(io.StringIO(text)):
+            asset_type = (row.get("asset_type") or "").strip().lower()
+            if asset_type not in self.ASSET_TYPES:
+                continue
+            kind = (row.get("transaction_type") or "").strip().lower()
+            if kind.startswith("exchange"):
+                continue  # Tausch, weder Kauf noch Verkauf
+            side = normalize_side(kind)
+            tx_date = to_date(row.get("transaction_date"))
+            filed_on = to_date(row.get("filing_date"))
+            name = (
+                row.get("filer_name")
+                or f"{row.get('first_name', '')} {row.get('last_name', '')}"
+            ).strip()
+            if not side or not tx_date or not filed_on or not name:
+                continue
+            if filed_on < start or tx_date > filed_on:
+                continue
+            yield RawTrade(
+                source=self.name,
+                external_actor_id=name,
+                actor_name=name,
+                symbol=clean_symbol(row.get("ticker")),
+                side=side,
+                transaction_date=tx_date,
+                disclosed_at=to_utc(filed_on),
+                amount_low=_num(row.get("amount_min")),
+                amount_high=_num(row.get("amount_max")),
+                chamber="senate",
+                option_type=self.ASSET_TYPES[asset_type],
+                raw={
+                    "report_id": row.get("report_id"),
+                    "owner": row.get("owner"),
+                    "asset": row.get("asset_name"),
+                    "url": row.get("report_url"),
+                },
+            )
 
 
 class QuiverSource(DisclosureSource):

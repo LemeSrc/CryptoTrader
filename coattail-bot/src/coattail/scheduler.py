@@ -93,6 +93,17 @@ def build_scheduler(app: App) -> BackgroundScheduler:
         max_instances=1,
         misfire_grace_time=3600,
     )
+    if not _scores_fresh():
+        # Frische Datenbank oder lange Pause: nicht bis zur Nacht warten. Die
+        # Verzoegerung laesst den Quellen Zeit, die Historie erst zu laden.
+        sched.add_job(
+            lambda: rescore_all(app),
+            "date",
+            run_date=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=20),
+            id="rescore_initial",
+            misfire_grace_time=3600,
+        )
+        log.info("Keine aktuelle Bewertung vorhanden, erster Lauf in 20 Minuten")
     sched.add_job(
         lambda: daily_report(app),
         CronTrigger(hour=cfg.notify.daily_summary_hour_utc, minute=5, timezone="UTC"),
@@ -101,3 +112,18 @@ def build_scheduler(app: App) -> BackgroundScheduler:
         misfire_grace_time=3600,
     )
     return sched
+
+
+def _scores_fresh(max_age_hours: float = 36.0) -> bool:
+    from sqlalchemy import func, select
+
+    from .db import session_scope
+    from .models import ActorStat
+
+    with session_scope() as session:
+        newest = session.scalar(select(func.max(ActorStat.computed_at)))
+    if newest is None:
+        return False
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=dt.UTC)
+    return dt.datetime.now(dt.UTC) - newest < dt.timedelta(hours=max_age_hours)

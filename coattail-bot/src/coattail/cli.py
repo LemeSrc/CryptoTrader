@@ -410,6 +410,7 @@ def probe(
     mit --source x abgefragt, weil jeder gelesene Post dort Geld kostet.
     """
     import datetime as dt
+    from collections import Counter
 
     from .sources.registry import build_enabled_sources
 
@@ -426,16 +427,23 @@ def probe(
             table.add_row("x", "-", "uebersprungen, kostet pro Post. Mit --source x pruefen.")
             continue
         count, sample = 0, ""
+        authors: Counter[str] = Counter()
         try:
             for item in src.fetch(since):
                 count += 1
                 if not sample:
                     sample = _describe(item)
+                if src.kind == "post":
+                    authors[str(getattr(item, "author", "?"))] += 1
                 if count >= 200:
                     break
         except Exception as exc:  # noqa: BLE001
             table.add_row(src.name, "Fehler", str(exc)[:80])
             continue
+        # Bei Posts zaehlt, wer geliefert hat. Ein Feed mit 0 faellt sonst
+        # hinter einem ergiebigen Nachbarn nicht auf.
+        if len(authors) > 1:
+            sample = ", ".join(f"{name} {n}" for name, n in authors.most_common(6))
         table.add_row(src.name, str(count) if count < 200 else "200+", sample or "nichts gefunden")
     if source and not any(s.name == source and s.enabled for s in ctx.config.sources):
         console.print(f"[yellow]{source} ist in config/config.yaml nicht eingeschaltet.[/yellow]")

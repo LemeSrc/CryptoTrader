@@ -1,0 +1,239 @@
+# Coattail: Strategie und Betrieb. Geheimnisse gehoeren in .env, nicht hierher.
+#
+# Voreinstellung ist der Trockenlauf mit Demodaten. So laeuft der Bot sofort,
+# ohne einen einzigen Zugangsschluessel, und zeigt trotzdem jede Entscheidung,
+# die er treffen wuerde. Erst Quellen einschalten, dann Papierhandel, dann echt.
+
+timezone: Europe/Berlin
+database_url: sqlite:///data/coattail.db
+log_level: INFO
+
+execution:
+  mode: dry_run          # dry_run | paper | live
+  broker: paper          # paper | alpaca | ccxt
+  exchange_id: binance
+  alpaca_paper: true
+  order_type: market
+  limit_offset_bps: 10
+  max_signal_age_minutes: 2880   # zwei Tage. Aeltere Meldungen sind kalt.
+  max_slippage_bps: 40
+  trading_hours_only: true
+  allow_short: false
+  allow_options: false
+  fractional_shares: true
+
+risk:
+  equity_base: 10000
+  risk_per_trade_pct: 0.5        # Verlust bei Stop, in Prozent des Kapitals
+  max_position_pct: 5
+  max_ticker_exposure_pct: 8     # Deckel ueber alle Vorbilder hinweg
+  max_sector_exposure_pct: 25
+  max_open_positions: 20
+  max_gross_exposure_pct: 80
+  daily_loss_limit_pct: 3
+  max_drawdown_pct: 12
+  default_stop_atr_mult: 2.5
+  default_take_profit_r: 3
+  min_order_notional: 25
+  require_stop_for_leverage: true
+
+scoring:
+  min_trades: 12                 # weniger ist Zufall, nicht Koennen
+  min_score: 55
+  min_win_rate: 0.45
+  max_disclosure_lag_days: 45    # wer spaeter meldet, ist nicht kopierbar
+  lookback_days: 1095
+  horizons_days: [21, 63, 126]
+  benchmark: SPY
+  prior_win_rate: 0.5
+  prior_weight: 20               # Staerke der Schrumpfung bei kleiner Stichprobe
+  recency_halflife_days: 365
+  rescore_interval_hours: 24
+  weights:
+    win_rate: 0.30
+    expectancy: 0.25
+    profit_factor: 0.15
+    consistency: 0.10
+    risk_discipline: 0.10
+    freshness: 0.10
+
+notify:
+  telegram_enabled: false
+  notify_on: [order, rejection, kill_switch, daily_summary]
+  daily_summary_hour_utc: 21
+
+# Titel, die nie gehandelt werden. Sinnvoll fuer alles, was zu duenn gehandelt
+# wird, um eine Order ohne Kurssprung aufzunehmen.
+ticker_blocklist: []
+# Wenn gefuellt, wird ausschliesslich hieraus gehandelt.
+ticker_allowlist: []
+
+sources:
+  # ---------------------------------------------------------------- Demo
+  - name: demo
+    kind: demo
+    enabled: true
+    poll_seconds: 86400
+    options:
+      seed: 7
+      history_days: 540
+      trades_per_actor: 40
+
+  # ------------------------------------------------- Kongress, kostenlos
+  - name: stockwatcher
+    kind: stockwatcher
+    enabled: false          # beste Basis fuer die Erstbewertung, grosse Datei
+    poll_seconds: 21600
+    options:
+      include_senate: true
+
+  - name: capitoltrades
+    kind: capitoltrades
+    enabled: false          # schnellster kostenloser Feed fuer neue Meldungen
+    poll_seconds: 900
+    options:
+      pages: 3
+      page_size: 100
+
+  # ------------------------------------------- Kongress, mit Zugangsdaten
+  - name: quiver
+    kind: quiver
+    enabled: false
+    poll_seconds: 600
+    options:
+      endpoint: /live/congresstrading
+
+  - name: finnhub
+    kind: finnhub
+    enabled: false
+    poll_seconds: 3600
+    options:
+      symbols: [NVDA, MSFT, AAPL, LMT, XOM]
+
+  - name: fmp
+    kind: fmp
+    enabled: false
+    poll_seconds: 1800
+    options:
+      pages: 2
+
+  # ------------------------------------------------ Insider, sehr schnell
+  - name: sec_form4
+    kind: sec_form4
+    enabled: false          # Form 4 kommt binnen zwei Tagen statt 45
+    poll_seconds: 600
+    options:
+      count: 100
+      min_value_usd: 250000
+      only_buys: true
+
+  - name: sec_13f
+    kind: sec_13f
+    enabled: false
+    poll_seconds: 86400
+    options:
+      ciks: []              # zum Beispiel 1067983 fuer Berkshire Hathaway
+
+  # ------------------------------------------------------- Trader kopieren
+  - name: hyperliquid
+    kind: hyperliquid
+    enabled: false          # Fills direkt von der Kette, kein Konto noetig
+    poll_seconds: 120
+    options:
+      wallets: []
+        # - address: "0x0000000000000000000000000000000000000000"
+        #   label: "Wallet eines Invo-Traders"
+
+  - name: invo
+    kind: invo
+    enabled: false
+    poll_seconds: 300
+    options:
+      mode: chain           # chain | api | cookie
+      wallets: []
+      follow: []
+      base_url: https://app.invoapp.com/api
+      trades_path: /users/{user}/trades
+      asset_class: crypto
+
+  - name: leaderboard
+    kind: leaderboard
+    enabled: false          # Bausatz fuer beliebige JSON-Ranglisten
+    poll_seconds: 600
+    options:
+      url: ""
+      root: data
+      label: custom
+      map:
+        symbol: symbol
+        side: side
+        time: timestamp
+        actor_id: trader.id
+        actor_name: trader.name
+        price: price
+        quantity: size
+        stop_loss: stopLoss
+
+  # ------------------------------------------------------- Posts und Politik
+  - name: bluesky
+    kind: bluesky
+    enabled: false          # einzige grosse Plattform mit offener Leseschnittstelle
+    poll_seconds: 60
+    options:
+      handles: []
+        # - senwarren.bsky.social
+      limit: 40
+
+  - name: mastodon
+    kind: mastodon
+    enabled: false
+    poll_seconds: 120
+    options:
+      base_url: https://truthsocial.com
+      accounts: []
+      limit: 40
+
+  - name: x
+    kind: x
+    enabled: false
+    poll_seconds: 300
+    options:
+      users: []
+        # - {id: "25073877", handle: "realDonaldTrump"}
+      limit: 20
+
+  - name: rss
+    kind: rss
+    enabled: false
+    poll_seconds: 300
+    options:
+      feeds:
+        - {url: "https://www.whitehouse.gov/presidential-actions/feed/", label: "Weisses Haus"}
+
+  - name: federal_register
+    kind: federal_register
+    enabled: false          # Verfuegungen, oft vor der Nachrichtenlage
+    poll_seconds: 900
+    options:
+      types: [PRESDOCU]
+      per_page: 50
+
+  - name: usaspending
+    kind: usaspending
+    enabled: false          # Grossauftraege des Bundes
+    poll_seconds: 21600
+    options:
+      min_amount: 100000000
+      limit: 50
+
+  # Keine Datenquelle, sondern der Schalter fuer die Post-Auswertung.
+  - name: posts_to_signals
+    kind: none
+    enabled: false
+    options:
+      use_llm: true
+      model: claude-opus-5   # claude-haiku-4-5 ist deutlich guenstiger bei viel Text
+      min_conviction: 0.55
+      max_age_minutes: 180
+      post_actor_score: 60
+      authors: []            # leer heisst: alle beobachteten Konten

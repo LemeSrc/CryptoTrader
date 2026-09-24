@@ -35,6 +35,40 @@ def clean_symbol(symbol: str | None) -> str | None:
     return s
 
 
+_HONORIFICS = {
+    "hon", "honorable", "sen", "senator", "rep", "representative", "mr", "mrs", "ms",
+    "miss", "dr", "jr", "sr", "ii", "iii", "iv", "md", "phd", "esq",
+}
+
+
+def person_key(name: str | None) -> str:
+    """Ein Schluessel pro Person, egal wie die Quelle den Namen schreibt.
+
+    Capitol Trades schreibt 'Nancy Pelosi', das Senatsformular 'Pelosi, Nancy',
+    ein dritter Feed 'Hon. Nancy P. Pelosi'. Ohne Angleichung wird daraus drei
+    Mal dieselbe Person mit je einem Drittel der Historie, und keine davon
+    kommt ueber die Mindestzahl an Trades. Genommen werden Vor- und Nachname,
+    Titel, Zusaetze und Mittelinitialen fallen weg.
+    """
+    if not name:
+        return ""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    text = text.strip()
+    if "," in text:
+        last, _, first = text.partition(",")
+        text = f"{first} {last}"
+    text = re.sub(r"\([^)]*\)", " ", text)
+    tokens = [t for t in re.split(r"[^A-Za-z']+", text.lower()) if t]
+    tokens = [t.replace("'", "") for t in tokens if t not in _HONORIFICS and len(t) > 1]
+    if not tokens:
+        return ""
+    if len(tokens) == 1:
+        return tokens[0]
+    return f"{tokens[0]}_{tokens[-1]}"
+
+
 def parse_amount_range(text: str | None) -> tuple[float | None, float | None]:
     """'$1,001 - $15,000' wird zu (1001.0, 15000.0)."""
     if not text:

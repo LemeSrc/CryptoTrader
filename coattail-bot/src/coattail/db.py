@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Actor, Base, RunState
@@ -23,10 +23,48 @@ def init_engine(config: AppConfig):
     url = config.database_url
     if url.startswith("sqlite:///"):
         Path(url.replace("sqlite:///", "", 1)).parent.mkdir(parents=True, exist_ok=True)
-    _engine = create_engine(url, future=True, pool_pre_ping=True)
+    connect_args: dict[str, Any] = {}
+    if url.startswith("sqlite"):
+        # Mehrere Quellen schreiben parallel. Ohne Wartezeit bricht der
+        # zweite Schreiber sofort mit 'database is locked' ab.
+        connect_args = {"timeout": 30, "check_same_thread": False}
+    _engine = create_engine(url, future=True, pool_pre_ping=True, connect_args=connect_args)
+    if url.startswith("sqlite"):
+        event.listen(_engine, "connect", _sqlite_pragmas)
     Base.metadata.create_all(_engine)
+    _add_missing_columns(_engine)
     _Session = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     return _engine
+
+
+def _sqlite_pragmas(dbapi_conn, _record) -> None:
+    """WAL erlaubt Lesen waehrend eines Schreibvorgangs, und der Dienst liest
+    und schreibt staendig gleichzeitig."""
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cur.close()
+
+
+# Spalten, die nach der ersten Version dazugekommen sind. create_all legt nur
+# fehlende Tabellen an, keine fehlenden Spalten in bestehenden.
+_LATE_COLUMNS = {
+    "positions": {"asset_class": "VARCHAR(16) DEFAULT 'equity'"},
+}
+
+
+def _add_missing_columns(engine) -> None:
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, columns in _LATE_COLUMNS.items():
+            if not insp.has_table(table):
+                continue
+            present = {c["name"] for c in insp.get_columns(table)}
+            for name, ddl in columns.items():
+                if name not in present:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
 @contextmanager

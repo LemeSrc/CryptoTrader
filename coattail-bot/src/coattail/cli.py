@@ -399,14 +399,81 @@ def backtest(
 
 
 @app.command()
+def probe(
+    source: str = typer.Option(None, "--source", "-s", help="nur diese eine Quelle"),
+    days: int = typer.Option(7, "--days", help="Zeitraum fuer die Stichprobe"),
+    config: str = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Fragt jede eingeschaltete Quelle einmal ab, ohne etwas zu speichern.
+
+    Zeigt, welche Quelle vom Server aus tatsaechlich Daten liefert. X wird nur
+    mit --source x abgefragt, weil jeder gelesene Post dort Geld kostet.
+    """
+    import datetime as dt
+
+    from .sources.registry import build_enabled_sources
+
+    ctx = App.create(config)
+    since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+    table = Table(title=f"Stichprobe der letzten {days} Tage")
+    table.add_column("Quelle")
+    table.add_column("Treffer", justify="right")
+    table.add_column("Beispiel")
+    for src in build_enabled_sources(ctx.config, ctx.secrets):
+        if source and src.name != source:
+            continue
+        if src.name == "x" and source != "x":
+            table.add_row("x", "-", "uebersprungen, kostet pro Post. Mit --source x pruefen.")
+            continue
+        count, sample = 0, ""
+        try:
+            for item in src.fetch(since):
+                count += 1
+                if not sample:
+                    sample = _describe(item)
+                if count >= 200:
+                    break
+        except Exception as exc:  # noqa: BLE001
+            table.add_row(src.name, "Fehler", str(exc)[:80])
+            continue
+        table.add_row(src.name, str(count) if count < 200 else "200+", sample or "nichts gefunden")
+    if source and not any(s.name == source and s.enabled for s in ctx.config.sources):
+        console.print(f"[yellow]{source} ist in config/config.yaml nicht eingeschaltet.[/yellow]")
+    console.print(table)
+
+
+def _describe(item: object) -> str:
+    symbol = getattr(item, "symbol", None)
+    if symbol is not None or hasattr(item, "side"):
+        return (
+            f"{getattr(item, 'actor_name', '')}: {getattr(item, 'side', '')} {symbol or '?'} "
+            f"am {getattr(item, 'transaction_date', '')}"
+        )[:90]
+    text = " ".join(str(getattr(item, "text", "")).split())
+    return f"{getattr(item, 'author', '')}: {text}"[:90]
+
+
+@app.command()
 def bootstrap(
-    days: int = typer.Option(1095, "--days", help="Wie weit die Historie geladen wird"),
     config: str = typer.Option(None, "--config", "-c"),
 ) -> None:
     """Erstbefuellung: Historie holen, Personen bewerten, Ergebnis zeigen."""
     ctx = App.create(config)
-    console.print(f"Historie der letzten {days} Tage holen ...")
-    ingest_all(ctx.config, ctx.secrets, kinds=("disclosure",))
+    with session_scope() as session:
+        demo = session.scalar(
+            select(func.count()).select_from(Actor).where(Actor.source == "demo")
+        ) or 0
+    if demo and not any(s.name == "demo" and s.enabled for s in ctx.config.sources):
+        console.print(
+            f"[yellow]In der Datenbank stehen noch {demo} Demo-Personen.[/yellow] "
+            "Die verfaelschen Bewertung und Papierdepot. Dienst stoppen, "
+            "data/coattail.db loeschen und bootstrap erneut starten."
+        )
+        raise typer.Exit(1)
+    console.print("Historie holen, beim ersten Mal dauert das einige Minuten ...")
+    counts = ingest_all(ctx.config, ctx.secrets, kinds=("disclosure",))
+    for name, count in counts.items():
+        console.print(f"  {name}: {count if count >= 0 else 'Fehler, siehe Log'}")
     console.print("Personen bewerten, das dauert beim ersten Mal ...")
     result = rescore_all(ctx)
     console.print(f"{result['bewertet']} bewertet, {result['geeignet']} freigegeben")

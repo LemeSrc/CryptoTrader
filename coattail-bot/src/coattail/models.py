@@ -235,6 +235,7 @@ class Position(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(String(32), index=True)
     broker: Mapped[str] = mapped_column(String(24))
+    asset_class: Mapped[str] = mapped_column(String(16), default="equity")
     quantity: Mapped[float] = mapped_column(Float, default=0.0)
     avg_price: Mapped[float] = mapped_column(Float, default=0.0)
     stop_loss: Mapped[float | None] = mapped_column(Float)

@@ -124,7 +124,7 @@ def _from_posts(session: Session, config: AppConfig, secrets: Secrets) -> int:
 
     classifier = HybridClassifier(
         secrets,
-        model=source_cfg.options.get("model", "claude-opus-5"),
+        model=source_cfg.options.get("model", "claude-sonnet-5"),
         use_llm=bool(source_cfg.options.get("use_llm", True)),
     )
     min_conviction = float(source_cfg.options.get("min_conviction", 0.55))
@@ -155,6 +155,10 @@ def _from_posts(session: Session, config: AppConfig, secrets: Secrets) -> int:
             key = fingerprint("post", post.platform, post.external_id, res.symbol, res.side)
             if session.scalar(select(Signal).where(Signal.dedupe_key == key)):
                 continue
+            if _recent_post_signal(session, res.symbol, res.side, posted):
+                # Derselbe Beitrag kommt oft ueber zwei Wege an, etwa Truth
+                # Social direkt und ueber das RSS-Archiv. Einmal reicht.
+                continue
             session.add(
                 Signal(
                     dedupe_key=key,
@@ -173,6 +177,26 @@ def _from_posts(session: Session, config: AppConfig, secrets: Secrets) -> int:
             )
             created += 1
     return created
+
+
+def _recent_post_signal(
+    session: Session, symbol: str, side: str, posted: dt.datetime, window_minutes: int = 60
+) -> bool:
+    window = dt.timedelta(minutes=window_minutes)
+    return (
+        session.scalar(
+            select(Signal.id)
+            .where(
+                Signal.origin.like("post:%"),
+                Signal.symbol == symbol,
+                Signal.side == side,
+                Signal.event_at >= posted - window,
+                Signal.event_at <= posted + window,
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
 
 def _conviction(session: Session, actor: Actor, d: Disclosure, score: float) -> float:

@@ -43,49 +43,37 @@ coattail doctor
 `COATTAIL_CONTACT` ist kein Formalismus. Die SEC verlangt eine Kontaktadresse
 im User-Agent und sperrt IPs, die ohne anfragen.
 
-Dann den Leerlauf einmal komplett durchspielen:
-
-```bash
-coattail bootstrap        # Demodaten, drei erfundene Personen
-coattail actors           # eine besteht, zwei fallen durch
-coattail why "Willi Wackel"
-coattail run-once
-coattail signals
-```
-
-Wer hier nicht versteht, warum eine Person durchfaellt, versteht es spaeter mit
-echtem Geld auch nicht. Die Begruendung steht im Klartext in `coattail why`.
+Seit Version 0.2 steht die Konfiguration schon auf echten Daten und
+Papierhandel. Ein Durchlauf mit Demodaten ist nur noch fuer Tests gedacht.
 
 ---
 
-## Phase 2: Echte Quellen anschalten (ein Abend)
+## Phase 2: Echte Quellen pruefen und Historie laden (ein Abend)
 
-In `config/config.yaml` diese vier auf `enabled: true` setzen. Alle kostenlos,
-alle ohne Registrierung:
+Eingeschaltet sind ab Werk: `capitoltrades` (Abgeordnete), `sec_form4`
+(Insiderkaeufe), `truthsocial` und `rss` (Beitraege von Donald Trump,
+Verfuegungen des Weissen Hauses), `bluesky` (einige Abgeordnete),
+`federal_register` und `usaspending`. Alle kostenlos, alle ohne Registrierung.
 
-```yaml
-- name: stockwatcher    # Jahre an Kongress-Historie, Basis der Bewertung
-  enabled: true
-- name: capitoltrades   # frischeste Meldungen, alle 15 Minuten
-  enabled: true
-- name: sec_form4       # Insiderkaeufe, binnen zwei Tagen statt 45
-  enabled: true
-- name: federal_register
-  enabled: true
-```
-
-Danach die Demoquelle ausschalten und die Datenbank zuruecksetzen, damit keine
-erfundenen Personen in der Rangliste stehen:
+Zuerst schauen, was vom eigenen Server aus tatsaechlich ankommt:
 
 ```bash
-rm -f data/coattail.db
-coattail ingest --source stockwatcher    # laedt viel, dauert ein paar Minuten
-coattail ingest --source capitoltrades
-coattail doctor                          # Zeilenzahlen pruefen
+coattail probe
 ```
 
-Wenn die Erstbefuellung durch ist, stehen je nach Zeitraum 20.000 bis 50.000
-Meldungen in der Datenbank.
+Eine Quelle mit 0 Treffern ueber sieben Tage ist entweder gesperrt oder hat ihr
+Format geaendert. Das Log (`journalctl -u coattail`) sagt, was davon.
+
+Dann die Historie laden. Wer vorher Demodaten hatte, legt die alte Datenbank
+beiseite, sonst stehen erfundene Personen in der Rangliste:
+
+```bash
+mv data/coattail.db data/coattail.db.demo
+coattail bootstrap        # holt rund drei Jahre Kongressmeldungen, dauert
+```
+
+`stockwatcher`, frueher die ergiebigste Gratisquelle, antwortet im September
+2026 nur noch mit 403 und ist deshalb aus.
 
 ---
 
@@ -173,6 +161,21 @@ Der Dienst startet nach einem Neustart von selbst und wird bei einem Absturz
 nach zehn Sekunden neu gestartet. `misfire_grace_time` sorgt dafuer, dass nach
 einem Neustart nicht alle verpassten Laeufe auf einmal nachgeholt werden.
 
+### Updates einspielen
+
+Aus dem geklonten Repo heraus, nicht aus `/opt/coattail`:
+
+```bash
+cd ~/CryptoTrader/coattail-bot
+sudo bash deploy/update.sh               # holt, kopiert, installiert neu, prueft
+sudo bash deploy/update.sh --reset-db    # dazu mit leerer Datenbank anfangen
+sudo bash deploy/update.sh --keep-config # eigene config.yaml nicht ersetzen
+```
+
+Datenbank und Konfiguration werden dabei nie geloescht, nur mit Datum
+umbenannt. Das Skript laesst den Dienst aus, damit man vorher noch
+`coattail bootstrap` laufen lassen kann.
+
 ### Variante B: Docker
 
 ```bash
@@ -209,7 +212,10 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
 
-Dann auf Papier umstellen:
+Die Voreinstellung ist bereits Papierhandel mit dem eigenen Papierdepot.
+Das rechnet mit echten Kursen, Schlupf und Gebuehren und fuellt Aktienorders
+nur zu US-Handelszeiten. Wer die Ausfuehrung naeher an der Wirklichkeit sehen
+will, nimmt das kostenlose Papierkonto von Alpaca:
 
 ```yaml
 execution:

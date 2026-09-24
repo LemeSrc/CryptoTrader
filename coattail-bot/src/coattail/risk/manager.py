@@ -91,9 +91,11 @@ class RiskManager:
         if blocked:
             return RiskDecision(False, reason=blocked)
 
-        price = signal.reference_price or self.prices.last_price(
+        # Der aktuelle Kurs zuerst. Der Preis in einer Kongressmeldung ist der
+        # vom Handelstag, oft Wochen alt, und wuerde Groesse und Stop verzerren.
+        price = self.prices.last_price(
             signal.symbol, asset_class=signal.asset_class
-        )
+        ) or signal.reference_price
         if not price or price <= 0:
             return RiskDecision(False, reason=f"kein Kurs fuer {signal.symbol}")
 

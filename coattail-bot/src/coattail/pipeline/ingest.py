@@ -19,9 +19,12 @@ from ..models import Disclosure, Post
 from ..settings import AppConfig, Secrets
 from ..sources.base import DisclosureSource, PostSource, RawPost, RawTrade
 from ..sources.registry import build_enabled_sources
-from ..util import clean_symbol, fingerprint, to_utc
+from ..util import clean_symbol, fingerprint, person_key, to_utc
 
 log = logging.getLogger(__name__)
+
+# Gemeinsame Quelle fuer alle Abgeordneten, egal aus welchem Feed.
+CONGRESS = "congress"
 
 
 def cursor_key(source_name: str) -> str:
@@ -86,15 +89,31 @@ def ingest_source(source: DisclosureSource | PostSource) -> int:
     return new_rows
 
 
+def actor_identity(trade: RawTrade) -> tuple[str, str]:
+    """Unter welchem Schluessel eine Person gefuehrt wird.
+
+    Abgeordnete tauchen in mehreren Feeds auf und sollen trotzdem nur eine
+    Historie haben, deshalb eine gemeinsame Quelle 'congress' und der
+    angeglichene Name als Schluessel. Trader und Insider haben pro Quelle
+    eindeutige Kennungen (Wallet, CIK) und bleiben, wie sie geliefert werden.
+    """
+    if trade.actor_type == "politician" and trade.source != "demo":
+        key = person_key(trade.actor_name) or trade.external_actor_id.lower()
+        return CONGRESS, key
+    return trade.source, trade.external_actor_id.lower()
+
+
 def _store_trade(trade: RawTrade) -> tuple[bool, dt.datetime | None]:
     symbol = clean_symbol(trade.symbol)
     if not symbol or not trade.transaction_date:
         return False, trade.disclosed_at
 
+    actor_source, actor_key = actor_identity(trade)
+
     # Bewusst ohne Quelle im Fingerprint: derselbe Trade aus zwei Feeds soll
     # nur einmal in der Datenbank landen.
     fp = fingerprint(
-        trade.external_actor_id.lower(),
+        actor_key,
         symbol,
         trade.side,
         trade.transaction_date.isoformat(),
@@ -106,8 +125,8 @@ def _store_trade(trade: RawTrade) -> tuple[bool, dt.datetime | None]:
             return False, trade.disclosed_at
         actor = get_or_create_actor(
             session,
-            source=trade.source,
-            external_id=trade.external_actor_id,
+            source=actor_source,
+            external_id=actor_key,
             name=trade.actor_name,
             actor_type=trade.actor_type,
             party=trade.party,

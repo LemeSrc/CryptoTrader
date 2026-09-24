@@ -23,19 +23,29 @@ def rescore_all(app: App, only_source: str | None = None) -> dict[str, int]:
     """
     out = {"bewertet": 0, "geeignet": 0}
     with session_scope() as session:
-        stmt = select(Actor).where(Actor.active.is_(True))
+        stmt = select(Actor.id).where(Actor.active.is_(True))
         if only_source:
             stmt = stmt.where(Actor.source == only_source)
-        actors = list(session.scalars(stmt))
-        log.info("Bewerte %d Personen", len(actors))
-        for actor in actors:
-            try:
+        actor_ids = list(session.scalars(stmt))
+    log.info("Bewerte %d Personen", len(actor_ids))
+    # Eine Transaktion pro Person. Ein einziger Block ueber alle wuerde die
+    # Datenbank fuer die gesamte Laufzeit sperren, und die Quellen, die
+    # parallel schreiben wollen, liefen in 'database is locked'.
+    for actor_id in actor_ids:
+        name = str(actor_id)
+        try:
+            with session_scope() as session:
+                actor = session.get(Actor, actor_id)
+                if actor is None:
+                    continue
+                name = actor.name
                 stat = rescore_actor(session, actor, app.prices, app.config.scoring)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Bewertung von %s fehlgeschlagen: %s", actor.name, exc)
-                continue
-            out["bewertet"] += 1
-            out["geeignet"] += int(stat.eligible)
+                eligible = bool(stat.eligible)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Bewertung von %s fehlgeschlagen: %s", name, exc)
+            continue
+        out["bewertet"] += 1
+        out["geeignet"] += int(eligible)
     log.info("Bewertung fertig: %(bewertet)d geprueft, %(geeignet)d freigegeben", out)
     return out
 

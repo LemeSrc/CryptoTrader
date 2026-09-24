@@ -84,14 +84,36 @@ sources:
       trades_per_actor: 40
 
   # ------------------------------------------------- Kongress, kostenlos
+  # Amtliche Pflichtmeldungen beider Kammern. Die Rohdaten kommen vom House
+  # Clerk und vom Senate eFD. Weil das Haus nur PDFs veroeffentlicht und die
+  # Senatsseite Zugriffe von ausserhalb der USA sperrt, liest der Bot einen
+  # oeffentlichen Tagesspiegel auf GitHub, der beides aufbereitet (jede Zeile
+  # verweist auf das Originaldokument). Aktualisiert taeglich gegen 15:30
+  # deutscher Zeit, oefter abfragen bringt nichts.
+  - name: house_ptr
+    kind: house_ptr
+    enabled: true
+    poll_seconds: 10800     # alle drei Stunden
+    options:
+      relist_days: 14       # spaet gespiegelte Meldungen noch mitnehmen
+
+  - name: senate_ptr
+    kind: senate_ptr
+    enabled: true
+    poll_seconds: 10800
+    options:
+      relist_days: 14
+
+  # Vom Server aus gesperrt: das Backend antwortet mit 503, die Webseite
+  # mit einer Bot-Pruefung (429). Bleibt drin, falls sich das aendert.
   - name: capitoltrades
     kind: capitoltrades
-    enabled: true           # Hauptquelle fuer Abgeordnete, kein Schluessel noetig
-    poll_seconds: 1800      # alle 30 Minuten, Meldungen kommen in Schueben
+    enabled: false
+    poll_seconds: 1800
     options:
-      mode: auto            # auto: erst JSON-Backend, dann Tabellenseite
-      pages: 3              # pro regulaerem Abruf
-      history_pages: 150    # beim ersten Lauf, reicht fuer rund drei Jahre
+      mode: auto
+      pages: 3
+      history_pages: 150
       page_size: 100
 
   - name: stockwatcher
@@ -181,12 +203,12 @@ sources:
         stop_loss: stopLoss
 
   # ------------------------------------------------------- Posts und Politik
-  # Truth Social direkt. Laeuft ueber die Mastodon-kompatible Schnittstelle.
-  # Wenn der Bot-Schutz den Server abweist, faengt der RSS-Eintrag weiter
-  # unten dieselben Beitraege auf. Doppelte Signale werden verworfen.
+  # Truth Social direkt, ueber die Mastodon-kompatible Schnittstelle. Vom
+  # Hetzner-Server aus mit 403 gesperrt (Cloudflare). Dieselben Beitraege
+  # kommen ueber das RSS-Archiv weiter unten, deshalb aus.
   - name: truthsocial
     kind: mastodon
-    enabled: true
+    enabled: false
     poll_seconds: 120
     options:
       base_url: https://truthsocial.com

@@ -84,9 +84,10 @@ coattail run                  # Dauerbetrieb mit Papierdepot
 
 Die Voreinstellung ist Papierhandel mit echten Daten: echte Meldungen, echte
 Posts, echte Kurse, aber ein simuliertes Depot mit Schlupf und Gebuehren.
-Kostenlos und ohne Registrierung laufen `capitoltrades`, `sec_form4`,
-`federal_register`, `usaspending`, `bluesky`, `truthsocial`, `rss` und
-`hyperliquid`. X kostet pro gelesenem Post und ist deshalb erst einmal aus.
+Kostenlos und ohne Registrierung laufen `house_ptr` und `senate_ptr`
+(amtliche Kongressmeldungen), `sec_form4`, `federal_register`,
+`usaspending`, `bluesky`, `rss` und `hyperliquid`. X kostet pro gelesenem
+Post und ist deshalb erst einmal aus.
 
 Fuer einen Blick ohne Netz gibt es weiter die Demoquelle. Dazu in der
 Konfiguration `demo` ein- und alle anderen Quellen ausschalten, eine eigene

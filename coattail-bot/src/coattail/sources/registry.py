@@ -10,7 +10,9 @@ from .congress import (
     CapitolTradesSource,
     FinnhubCongressSource,
     FmpCongressSource,
+    HousePtrSource,
     QuiverSource,
+    SenatePtrSource,
     StockWatcherSource,
 )
 from .demo import DemoSource
@@ -23,6 +25,8 @@ log = logging.getLogger(__name__)
 
 REGISTRY: dict[str, type[Source]] = {
     "stockwatcher": StockWatcherSource,
+    "house_ptr": HousePtrSource,
+    "senate_ptr": SenatePtrSource,
     "capitoltrades": CapitolTradesSource,
     "quiver": QuiverSource,
     "finnhub": FinnhubCongressSource,

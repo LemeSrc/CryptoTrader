@@ -20,7 +20,7 @@ import statistics
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Actor, Disclosure, Post, Signal
+from ..models import Actor, ActorStat, Disclosure, Post, Signal
 from ..nlp.classifier import HybridClassifier
 from ..scoring.score import latest_stat
 from ..settings import AppConfig, Secrets
@@ -33,44 +33,60 @@ SIGNAL_CURSOR = "signals"
 
 
 def build_signals(config: AppConfig, secrets: Secrets) -> int:
-    from ..db import get_state, session_scope, set_state
+    from ..db import session_scope, set_state
 
     created = 0
     with session_scope() as session:
-        state = get_state(session, cursor_key(SIGNAL_CURSOR), {}) or {}
-        last_disclosure_id = int(state.get("last_disclosure_id", 0))
-
-        created += _from_disclosures(session, config, last_disclosure_id)
+        created += _from_disclosures(session, config)
         created += _from_posts(session, config, secrets)
-
-        newest = session.scalar(select(Disclosure.id).order_by(Disclosure.id.desc()).limit(1)) or 0
         set_state(
             session,
             cursor_key(SIGNAL_CURSOR),
-            {"last_disclosure_id": newest, "last_run": dt.datetime.now(dt.UTC).isoformat()},
+            {"last_run": dt.datetime.now(dt.UTC).isoformat(), "created": created},
         )
     log.info("%d neue Signale erzeugt", created)
     return created
 
 
-def _from_disclosures(session: Session, config: AppConfig, last_id: int) -> int:
+def _from_disclosures(session: Session, config: AppConfig) -> int:
+    """Alle noch frischen Meldungen pruefen, nicht nur die seit dem letzten Lauf.
+
+    Frueher lief hier ein Zeiger ueber die Meldungsnummer. Der schob sich auch
+    ueber Meldungen hinweg, deren Person zu dem Zeitpunkt noch gar nicht
+    bewertet war, etwa direkt nach dem Start oder vor der naechtlichen
+    Bewertung. Wurde die Person danach freigegeben, war die Meldung verloren.
+    Jetzt wird jeder Lauf das ganze Frischefenster durchgesehen, doppelte
+    Signale verhindert der Schluessel.
+    """
+    max_age = dt.timedelta(minutes=config.execution.max_signal_age_minutes)
+    now = dt.datetime.now(dt.UTC)
+    cutoff = now - max_age
     rows = list(
         session.scalars(
-            select(Disclosure).where(Disclosure.id > last_id).order_by(Disclosure.id.asc())
+            select(Disclosure)
+            .where(
+                Disclosure.ingested_at >= cutoff,
+                (Disclosure.disclosed_at >= cutoff) | Disclosure.disclosed_at.is_(None),
+            )
+            .order_by(Disclosure.id.asc())
         )
     )
     if not rows:
         return 0
 
-    max_age = dt.timedelta(minutes=config.execution.max_signal_age_minutes)
-    now = dt.datetime.now(dt.UTC)
     created = 0
+    stats: dict[int, ActorStat | None] = {}
 
     for d in rows:
+        key = fingerprint("disc", d.fingerprint)
+        if session.scalar(select(Signal.id).where(Signal.dedupe_key == key)):
+            continue
         actor = session.get(Actor, d.actor_id)
         if actor is None:
             continue
-        stat = latest_stat(session, actor.id)
+        if actor.id not in stats:
+            stats[actor.id] = latest_stat(session, actor.id)
+        stat = stats[actor.id]
         if stat is None or not stat.eligible:
             continue
 
@@ -83,9 +99,6 @@ def _from_disclosures(session: Session, config: AppConfig, last_id: int) -> int:
             continue
 
         conviction = _conviction(session, actor, d, stat.score)
-        key = fingerprint("disc", d.fingerprint)
-        if session.scalar(select(Signal).where(Signal.dedupe_key == key)):
-            continue
 
         session.add(
             Signal(

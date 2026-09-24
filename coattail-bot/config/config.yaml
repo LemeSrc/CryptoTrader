@@ -152,6 +152,7 @@ sources:
     poll_seconds: 900
     options:
       count: 100
+      max_pages: 8          # bis zu 400 Meldungen pro Abruf, reicht auch abends
       min_value_usd: 250000
       only_buys: true
 

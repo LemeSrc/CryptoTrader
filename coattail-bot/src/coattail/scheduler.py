@@ -116,8 +116,11 @@ def build_scheduler(app: App) -> BackgroundScheduler:
 
 
 def _catch_up_rescore(app: App) -> None:
-    if not _scores_fresh():
-        rescore_all(app)
+    if _scores_fresh():
+        log.info("Bewertung ist aktuell, nichts nachzuholen")
+        return
+    log.info("Keine vollstaendige Bewertung der letzten 36 Stunden, starte sie jetzt")
+    rescore_all(app)
 
 
 def _scores_fresh(max_age_hours: float = 36.0) -> bool:

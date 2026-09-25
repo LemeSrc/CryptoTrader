@@ -175,3 +175,23 @@ def test_serie_leerer_antworten_gilt_als_ausfall(tmp_path, monkeypatch):
     assert p.prefetch(symbols) == 0
     assert p.yahoo_blocked()
     assert not any(p._is_missing(f"equity:{s}") for s in symbols)
+
+
+def test_lauf_ohne_kurse_gilt_nicht_als_fertig(config, prices):
+    """So sah die Nacht auf dem Server aus: Yahoo gedrosselt, jeder Titel ohne
+    Kurs, alle Personen fallen durch. Das darf den Nachholjob nicht stilllegen."""
+    from coattail import scheduler, tasks
+
+    for i in range(3):
+        _store_trade(RawTrade(
+            source="senate_ptr", external_actor_id="x", actor_name="John Boozman",
+            symbol=f"T{i}", side="buy", transaction_date=dt.date.today() - dt.timedelta(days=40 + i),
+            disclosed_at=dt.datetime.now(dt.UTC) - dt.timedelta(days=20),
+        ))
+    prices.forward_return = lambda *a, **k: None
+    app = types.SimpleNamespace(config=AppConfig(), prices=prices)
+    result = tasks.rescore_all(app)
+    assert result["bewertet"] == 1
+    assert result["kursabdeckung_prozent"] == 0
+    assert result.get("abgebrochen") == 1
+    assert scheduler._scores_fresh() is False

@@ -17,6 +17,8 @@ log = logging.getLogger(__name__)
 
 
 RESCORE_STATE = "rescore"
+# Unterhalb dieses Anteils an Trades mit Kursdaten ist ein Lauf wertlos.
+MIN_PRICE_COVERAGE = 0.5
 _RESCORE_LOCK = threading.Lock()
 
 
@@ -71,6 +73,8 @@ def _rescore_all(app: App, only_source: str | None, out: dict[str, int]) -> dict
         actor_ids = list(session.scalars(stmt))
     log.info("Bewerte %d Personen", len(actor_ids))
     _prefetch_prices(app, actor_ids)
+    trades_total = 0
+    trades_priced = 0
     # Eine Transaktion pro Person. Ein einziger Block ueber alle wuerde die
     # Datenbank fuer die gesamte Laufzeit sperren, und die Quellen, die
     # parallel schreiben wollen, liefen in 'database is locked'.
@@ -94,6 +98,8 @@ def _rescore_all(app: App, only_source: str | None, out: dict[str, int]) -> dict
                 name = actor.name
                 stat = rescore_actor(session, actor, app.prices, app.config.scoring)
                 eligible = bool(stat.eligible)
+                trades_total += int(stat.n_trades or 0)
+                trades_priced += int(stat.n_closed or 0)
         except Exception as exc:  # noqa: BLE001
             log.warning("Bewertung von %s fehlgeschlagen: %s", name, exc)
             continue
@@ -101,7 +107,24 @@ def _rescore_all(app: App, only_source: str | None, out: dict[str, int]) -> dict
         out["geeignet"] += int(eligible)
         if out["bewertet"] % 10 == 0:
             log.info("Bewertung: %d von %d Personen", out["bewertet"], len(actor_ids))
-    log.info("Bewertung fertig: %(bewertet)d geprueft, %(geeignet)d freigegeben", out)
+
+    coverage = trades_priced / trades_total if trades_total else 1.0
+    out["kursabdeckung_prozent"] = round(coverage * 100)
+    log.info(
+        "Bewertung fertig: %d geprueft, %d freigegeben, Kurse fuer %d%% der Trades",
+        out["bewertet"], out["geeignet"], out["kursabdeckung_prozent"],
+    )
+    if coverage < MIN_PRICE_COVERAGE:
+        # Ohne Kurse faellt jede Person mangels auswertbarer Trades durch. So
+        # ein Lauf sieht fertig aus, ist aber wertlos und darf den Nachholjob
+        # nicht fuer 36 Stunden stilllegen.
+        log.warning(
+            "Nur %d%% der Trades hatten Kurse. Lauf gilt nicht als fertig, "
+            "neuer Versuch mit dem naechsten Nachholjob.",
+            out["kursabdeckung_prozent"],
+        )
+        out["abgebrochen"] = 1
+        return out
     if only_source is None:
         with session_scope() as session:
             set_state(

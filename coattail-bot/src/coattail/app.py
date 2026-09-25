@@ -33,7 +33,9 @@ class App:
         secrets = get_secrets()
         setup_logging(config.log_level)
         init_engine(config)
-        prices = PriceProvider()
+        prices = PriceProvider(
+            alpaca_key=secrets.alpaca_key_id, alpaca_secret=secrets.alpaca_secret_key
+        )
         broker = build_broker(config, secrets, prices)
         risk = RiskManager(config, prices)
         notifier = Notifier(config, secrets)

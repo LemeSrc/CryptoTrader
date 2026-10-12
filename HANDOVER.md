@@ -64,8 +64,10 @@ Scoring runs nightly at 03:20 plus an hourly catch-up job if no complete run in 
 
 - The paper phase restarted on 2026-10-12 with a fresh database, 10,000 capital, no positions. The old database is kept on the server as `data/coattail.db.bak-20261012-194835`.
 - Reason for the restart: on 2026-10-02 the bot bought KOD 47 times in one run (235% of capital instead of the 8% ticker limit). The kill switch then tripped almost daily and every new signal was rejected. Fixed in PR #9.
-- After bootstrap: 149 people scored, 99% price coverage, 8 approved, all from Congress, among them Babin, Moran, Morrison, Sessions, McCormick, Pelosi, Latta.
-- Babin and Latta have only 12 to 14 trades. Recommendation given to the owner: raise `scoring.min_trades` to 20 before any real money.
+- Scoring was corrected on 2026-10-12 (PR #14): only buys count, because the bot never opens a position on a sale, and the drawdown is computed with 5% of capital per trade instead of all of it. Before that, 60 of 147 members failed on a drawdown above 60%, and Babin was approved with twelve sales on one day and no buys.
+- After rescoring: 161 people scored, 99% price coverage, 9 approved: Tim Moore, Pelosi, David McCormick, Cleo Fields, Capito, Latta, McConnell, Whitehouse, Richard McCormick. Together 161 buys in the last 12 months, before the correction 62.
+- Three of them buy one stock over and over: McConnell (WFC), David McCormick (BITB, a Bitcoin ETF), Latta (FMAO, his local bank). That is one idea each, not stock picking. Recommendation given to the owner: block them with `coattail set-override`, and raise `scoring.min_trades` to 20 before any real money.
+- The Congress pool is limited: 147 members with trades, 69 of them with too few. More actors need new sources. `sec_13f` (funds) is only a stub: latest quarter, no ticker mapping, no buy and sell differences.
 - Telegram is on. A manual test message arrived. Not yet seen: a message sent by the bot itself (daily report is scheduled for 21:05 UTC).
 - Expect about 3 to 5 paper trades per month. Paper phase planned for two to three months from 2026-10-12.
 
@@ -76,6 +78,7 @@ Scoring runs nightly at 03:20 plus an hourly catch-up job if no complete run in 
 3. `selectolax` has no upper bound in `pyproject.toml`. A rebuilt server venv would pull 1.0, which breaks the HTML parsing in `capitoltrades` and one social source. Both are off today.
 4. `max_open_positions` does not count buys planned in the same run. The 80% gross limit catches it.
 5. The kill switch logs a CRITICAL line every 5 minutes while active instead of once.
+6. `person_key` splits one member into two when the source writes suffixes differently (seen: Neal Dunn as `facs_patrick` and `facs_dunn`). Fixing it needs a merge of existing actors.
 6. Not looked into: why the service restarted on 2026-10-02 and 2026-10-04, and whether a fund like Baker Bros. Advisors (Form 4, 10% owner) is a sensible actor to copy.
 7. Cosmetic: yfinance still prints ERROR lines for delisted tickers during `coattail score`. Harmless.
 8. Before real money: `min_trades: 20`, at least two to three months of paper results that beat SPY after fees, kill switch tested (`coattail kill` / `coattail resume`), then Alpaca live with a small amount.

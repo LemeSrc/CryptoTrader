@@ -139,6 +139,57 @@ def test_haengengebliebene_signale_werden_wieder_eingereiht(config):
         assert sig.status == "simulated"
 
 
+def test_limit_pro_titel_gilt_auch_innerhalb_eines_durchlaufs(config):
+    """Regressionstest fuer den 02.10.2026: 47 Meldezeilen zum selben Kauf
+    wurden im selben Durchlauf alle freigegeben, weil die Risikopruefung nur
+    gebuchte Positionen sah. Aus 8 Prozent Limit wurden 235 Prozent."""
+    from coattail.brokers.paper import PaperBroker
+    from coattail.pipeline.execute import execute_pending
+    from coattail.prices import PriceProvider
+    from coattail.risk.manager import RiskManager
+
+    class Fest(PriceProvider):
+        def __init__(self):
+            pass
+
+        def last_price(self, symbol, asset_class="equity"):
+            return 100.0
+
+        def atr(self, symbol, window=14, asset_class="equity"):
+            return 2.0
+
+    with session_scope() as session:
+        for i in range(5):
+            session.add(
+                Signal(
+                    dedupe_key=f"zeile{i}",
+                    origin="test",
+                    symbol="KOD",
+                    asset_class="equity",
+                    side="buy",
+                    intent="open",
+                    event_at=dt.datetime.now(dt.UTC),
+                    actor_score=70.0,
+                    payload={},
+                )
+            )
+
+    cfg = AppConfig()
+    cfg.execution.mode = "dry_run"
+    cfg.execution.trading_hours_only = False
+    cfg.risk.equity_base = 10_000
+    cfg.risk.max_position_pct = 5
+    cfg.risk.max_ticker_exposure_pct = 8
+    prices = Fest()
+    stats = execute_pending(cfg, PaperBroker(prices), RiskManager(cfg, prices))
+
+    # 500 plus 300 fuellen die 800 Dollar, der Rest wird abgelehnt.
+    assert stats["rejected"] == 3
+    with session_scope() as session:
+        abgelehnt = list(session.scalars(select(Signal).where(Signal.status == "rejected")))
+        assert all("ausgeschoepft" in s.reject_reason for s in abgelehnt)
+
+
 def test_config_pfad_bei_installierter_venv_gefunden(tmp_path, monkeypatch):
     """Regressionstest fuer den Bug aus der ersten Serverinstallation: bei
     'pip install .' (kein editables Setup) landet settings.py tief in

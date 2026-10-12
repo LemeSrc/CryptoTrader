@@ -84,7 +84,13 @@ class RiskManager:
         return (1 - rows[-1] / peak) * 100 if peak else 0.0
 
     # --------------------------------------------------------- Pruefungen
-    def evaluate(self, session: Session, signal: Signal) -> RiskDecision:
+    def evaluate(
+        self, session: Session, signal: Signal, planned: dict[str, float] | None = None
+    ) -> RiskDecision:
+        # planned: Betrag je Titel, der im selben Durchlauf schon freigegeben,
+        # aber noch nicht als Position gebucht ist. Ohne ihn sieht jede von
+        # 47 Meldezeilen zum selben Kauf wie die erste aus.
+        planned = planned or {}
         notes: list[str] = []
 
         blocked = self._hard_blocks(session, signal)
@@ -123,7 +129,9 @@ class RiskManager:
             risk_amount = quantity * stop_distance
             notes.append(f"Groesse auf {self.risk.max_position_pct} Prozent des Kapitals gedeckelt")
 
-        headroom = self._ticker_headroom(session, signal.symbol, equity)
+        headroom = self._ticker_headroom(session, signal.symbol, equity) - planned.get(
+            signal.symbol, 0.0
+        )
         if headroom <= 0:
             return RiskDecision(False, reason=f"Limit fuer {signal.symbol} bereits ausgeschoepft")
         if notional > headroom:
@@ -132,7 +140,7 @@ class RiskManager:
             risk_amount = quantity * stop_distance
             notes.append("Groesse wegen bestehender Position im selben Titel reduziert")
 
-        gross_left = self._gross_headroom(session, equity)
+        gross_left = self._gross_headroom(session, equity) - sum(planned.values())
         if notional > gross_left:
             quantity = max(0.0, gross_left / price)
             notional = quantity * price

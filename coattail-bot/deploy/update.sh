@@ -42,7 +42,7 @@ main() {
   git -C "$SRC_DIR" pull --ff-only
 
   echo "== Dienst anhalten =="
-  systemctl stop coattail 2>/dev/null || true
+  systemctl stop coattail coattail-news 2>/dev/null || true
 
   if [[ $RESET_DB -eq 1 && -f "$APP_DIR/data/coattail.db" ]]; then
     echo "== Datenbank beiseitelegen =="
@@ -80,6 +80,13 @@ main() {
 
   echo "== Dienstdatei =="
   cp "$APP_DIR/deploy/coattail.service" /etc/systemd/system/coattail.service
+  # Die Nachrichten-Instanz ist derselbe Dienst mit eigener Konfiguration und
+  # Datenbank (config/news.yaml). Aus der einen Dienstdatei abgeleitet, damit
+  # die beiden nicht auseinanderlaufen.
+  sed -e 's|coattail run|coattail run -c config/news.yaml|' \
+      -e 's|^SyslogIdentifier=.*|SyslogIdentifier=coattail-news|' \
+      -e 's|^Description=.*|Description=Coattail Nachrichten-Instanz|' \
+      "$APP_DIR/deploy/coattail.service" > /etc/systemd/system/coattail-news.service
   systemctl daemon-reload
 
   echo "== Pruefung =="
@@ -88,13 +95,13 @@ main() {
 
   cat <<INFO
 
-Update eingespielt, der Dienst ist noch aus.
+Update eingespielt, beide Dienste (coattail, coattail-news) sind noch aus.
 
 Bei frischer Datenbank zuerst die Historie laden (dauert einige Minuten):
   cd $APP_DIR && sudo -u $APP_USER .venv/bin/coattail bootstrap
 
 Dann starten:
-  sudo systemctl start coattail
+  sudo systemctl start coattail coattail-news
   journalctl -u coattail -f
 
 INFO

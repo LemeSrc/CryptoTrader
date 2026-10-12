@@ -177,6 +177,7 @@ class ExecutionConfig(BaseModel):
 
 class NotifyConfig(BaseModel):
     telegram_enabled: bool = False
+    label: str = ""  # Vorsatz, wenn mehrere Instanzen in denselben Chat schreiben
     notify_on: list[str] = Field(
         default_factory=lambda: ["order", "rejection", "kill_switch", "daily_summary"]
     )

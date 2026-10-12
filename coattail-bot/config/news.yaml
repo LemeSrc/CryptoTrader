@@ -1,0 +1,96 @@
+# Zweite Instanz: handelt nur auf Beitraege und Nachrichten, ohne Kongress-
+# und Insidermeldungen. Eigene Datenbank, eigenes Papierdepot. So laesst sich
+# getrennt ablesen, ob Nachrichten allein etwas taugen.
+#
+# Laeuft als Dienst coattail-news mit demselben Programm und derselben .env.
+# Befehle brauchen den Zusatz -c, zum Beispiel:
+#   coattail positions -c config/news.yaml
+#
+# Handel und Risiko stehen bewusst gleich wie in config.yaml, sonst sind die
+# beiden Depots nicht vergleichbar.
+
+timezone: Europe/Berlin
+database_url: sqlite:///data/news.db
+log_level: INFO
+
+execution:
+  mode: paper
+  broker: paper
+  order_type: market
+  limit_offset_bps: 10
+  max_signal_age_minutes: 4320
+  max_slippage_bps: 40
+  trading_hours_only: true
+  allow_short: false
+  allow_options: false
+  fractional_shares: true
+
+risk:
+  equity_base: 10000
+  risk_per_trade_pct: 0.5
+  max_position_pct: 5
+  max_ticker_exposure_pct: 8
+  max_sector_exposure_pct: 25
+  max_open_positions: 20
+  max_gross_exposure_pct: 80
+  daily_loss_limit_pct: 3
+  max_drawdown_pct: 12
+  default_stop_atr_mult: 2.5
+  default_take_profit_r: 3
+  min_order_notional: 25
+  require_stop_for_leverage: true
+
+notify:
+  telegram_enabled: true
+  label: Nachrichten       # steht vor jeder Telegram-Nachricht dieser Instanz
+  notify_on: [order, rejection, kill_switch, daily_summary]
+  daily_summary_hour_utc: 21
+
+sources:
+  - name: bluesky
+    kind: bluesky
+    enabled: true
+    poll_seconds: 180
+    options:
+      handles:
+        - fetterman.senate.gov
+        - booker.senate.gov
+        - schiff.senate.gov
+        - aoc.bsky.social
+      limit: 30
+
+  - name: rss
+    kind: rss
+    enabled: true
+    poll_seconds: 300
+    options:
+      feeds:
+        - {url: "https://www.whitehouse.gov/presidential-actions/feed/", label: "Weisses Haus"}
+        - {url: "https://trumpstruth.org/feed", label: "realDonaldTrump"}
+
+  - name: federal_register
+    kind: federal_register
+    enabled: true
+    poll_seconds: 1800
+    options:
+      types: [PRESDOCU]
+      per_page: 50
+
+  - name: usaspending
+    kind: usaspending
+    enabled: true
+    poll_seconds: 21600
+    options:
+      min_amount: 100000000
+      limit: 50
+
+  - name: posts_to_signals
+    kind: none
+    enabled: true
+    options:
+      use_llm: true
+      model: claude-sonnet-5
+      min_conviction: 0.6
+      max_age_minutes: 120
+      post_actor_score: 60
+      authors: []

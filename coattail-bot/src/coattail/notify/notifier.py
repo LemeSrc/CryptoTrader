@@ -32,6 +32,8 @@ class Notifier:
     def _send(self, text: str, event: str) -> None:
         if not self.enabled or event not in self.config.notify.notify_on:
             return
+        if self.config.notify.label:
+            text = f"[{self.config.notify.label}] {text}"
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         try:
             with HttpClient(timeout=10.0) as client:

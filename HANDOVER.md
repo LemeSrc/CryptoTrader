@@ -22,6 +22,8 @@ Last updated: 2026-10-12, after a server check, a fix and a fresh start of the p
 | Secrets | `/opt/coattail/.env` on the server only, never in the repo. Contains `COATTAIL_CONTACT`, Alpaca paper keys, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (bot `@PoliticlyBot`) |
 | Config | `/opt/coattail/config/config.yaml` (copied from repo on every update, old one kept as `.bak-<date>`) |
 | Database | `/opt/coattail/data/coattail.db` (SQLite) |
+| News instance | systemd unit `coattail-news`, same program and `.env`, config `config/news.yaml`, database `data/news.db`. Trades only on posts (Bluesky, RSS, Federal Register, USAspending). Started 2026-10-12. Commands need `-c config/news.yaml`. Its Telegram messages start with `[Nachrichten]`. |
+| Strategy study | `strategy-study/study.py` in the repo, runs on the PC only. Backtests simple rules for stocks and crypto separately. First run 2026-10-12: no rule beat buy and hold. |
 
 Run server commands from PowerShell like this:
 
@@ -84,4 +86,6 @@ Scoring runs nightly at 03:20 plus an hourly catch-up job if no complete run in 
 - Scoring calls the price series about ten times per filing. Anything that is not cached gets hit again and again. The missing-list (`data/prices/_missing.json`) and the bulk prefetch exist because of this. If a scoring run hangs, check the log for Yahoo throttling first.
 - Delete `data/prices/_missing.json` if it was written while a price source was blocked.
 - Risk limits read positions from the database. Anything approved in the same run is not booked yet, so `_decide` passes the planned amounts to `RiskManager.evaluate`. One Form 4 filing can produce dozens of signals for the same ticker.
+- `update.sh` stops both services and starts neither. Start with `systemctl start coattail coattail-news`. Bash reads the script before `git pull` replaces it, so a change to `update.sh` itself only takes effect on the second run.
+- No `ANTHROPIC_API_KEY` on the server. Posts are classified by the rule stage only, in both instances, so post signals are rare. The main bot also trades post signals, the news instance exists to see them in isolation.
 - A fresh database loses the Form 4 actors until their filings have been collected again. The approved count drops for a while after `--reset-db`.

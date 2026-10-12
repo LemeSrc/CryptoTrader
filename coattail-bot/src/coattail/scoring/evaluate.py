@@ -32,6 +32,11 @@ from . import metrics
 
 log = logging.getLogger(__name__)
 
+# Anteil des Kapitals je kopiertem Trade bei der Rueckschlag-Rechnung, wie
+# risk.max_position_pct. Mit vollem Einsatz je Trade kam bei jedem, der oft
+# handelt, ein Rueckschlag von 60 bis 99 Prozent heraus, auch bei guter Bilanz.
+COPY_STAKE = 0.05
+
 
 @dataclass
 class Evaluation:
@@ -63,7 +68,16 @@ def evaluate_disclosure_actor(
     """Politiker und Insider: Qualitaet aus dem Kursverlauf nach der Meldung."""
     ev = Evaluation()
     cutoff = dt.date.today() - dt.timedelta(days=cfg.lookback_days)
-    rows = [d for d in disclosures if d.symbol and d.transaction_date and d.transaction_date >= cutoff]
+    # Nur Kaeufe. Der Bot eroeffnet nie eine Position auf einen Verkauf hin,
+    # ein Verkauf schliesst hoechstens eine kopierte. Wer gut verkauft, sagt
+    # damit nichts darueber, ob sich seine Kaeufe lohnen.
+    rows = sorted(
+        (
+            d for d in disclosures
+            if d.symbol and d.side == "buy" and d.transaction_date and d.transaction_date >= cutoff
+        ),
+        key=lambda d: (d.disclosed_at.date() if d.disclosed_at else d.transaction_date),
+    )
     if not rows:
         return ev
 
@@ -114,7 +128,7 @@ def evaluate_disclosure_actor(
     ev.expectancy = metrics.expectancy(alpha_disc)
     ev.alpha_from_trade = metrics.expectancy(alpha_trade)
     ev.alpha_from_disclosure = ev.expectancy
-    ev.max_drawdown = metrics.max_drawdown(alpha_disc)
+    ev.max_drawdown = metrics.max_drawdown([a * COPY_STAKE for a in alpha_disc])
     ev.median_lag_days = statistics.median(lags) if lags else 0.0
     ev.median_hold_days = float(horizon)
     ev.consistency = metrics.consistency(by_year)

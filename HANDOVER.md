@@ -1,7 +1,7 @@
 # Handover: Coattail bot
 
 Notes for a Claude Code session running on the owner's Windows PC (PowerShell).
-Last updated: 2026-10-12. Status details are from 2026-09-25, the last server log seen.
+Last updated: 2026-10-12, after a server check, a fix and a fresh start of the paper phase.
 
 ## The owner
 
@@ -19,7 +19,7 @@ Last updated: 2026-10-12. Status details are from 2026-09-25, the last server lo
 | Clone on server | `/root/CryptoTrader` (source for updates only) |
 | Installed bot | `/opt/coattail`, runs as user `coattail`, venv in `/opt/coattail/.venv` |
 | Service | systemd unit `coattail` (`journalctl -u coattail -f` for the log) |
-| Secrets | `/opt/coattail/.env` on the server only, never in the repo. Contains `COATTAIL_CONTACT` and Alpaca paper keys |
+| Secrets | `/opt/coattail/.env` on the server only, never in the repo. Contains `COATTAIL_CONTACT`, Alpaca paper keys, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (bot `@PoliticlyBot`) |
 | Config | `/opt/coattail/config/config.yaml` (copied from repo on every update, old one kept as `.bak-<date>`) |
 | Database | `/opt/coattail/data/coattail.db` (SQLite) |
 
@@ -33,10 +33,12 @@ Always run `coattail` commands from `/opt/coattail` as user `coattail`, otherwis
 
 ## How to ship a change
 
-1. Change code in `coattail-bot/`, run `ruff check src tests` and `pytest` (73 tests at last count).
-2. Commit, push a branch, open a PR, let the owner merge it on GitHub.
+1. Change code in `coattail-bot/`, run `ruff check src tests` and `pytest` (74 tests at last count).
+   On the PC `python` is not on PATH. Use `C:\Users\lenny\AppData\Local\Programs\Python\Python314\python.exe` and a throwaway venv. Install `selectolax<1` there, version 1.0 breaks two capitoltrades tests (the server runs 0.4.12).
+2. Commit, push a branch, open a PR with `gh` (`C:\Program Files\GitHub CLI\gh.exe`, logged in as LemeSrc). Since 2026-10-12 the owner lets Claude merge during the paper phase. Give merging back to the owner for anything touching risk or orders once real money is involved.
 3. On the server: `cd ~/CryptoTrader/coattail-bot && sudo bash deploy/update.sh`, then `sudo systemctl start coattail`.
    `update.sh` pulls, stops the service, copies files, force-reinstalls the package, runs `doctor`. It never deletes the DB or `.env`. Options: `--reset-db`, `--keep-config`.
+   Claude Code on the PC has the allow rule `Bash(ssh root@188.245.26.65:*)`. Commands must start exactly with `ssh root@188.245.26.65`, no options in between. Still ask the owner before `--reset-db` or deleting anything.
 
 ## What the bot does
 
@@ -56,21 +58,30 @@ Prices: Alpaca first (keys in `.env`), then Yahoo, then Stooq. Yahoo throttles t
 
 Scoring runs nightly at 03:20 plus an hourly catch-up job if no complete run in 36 h. A run with under 50% price coverage does not count as finished.
 
-## State as of 2026-09-25
+## State as of 2026-10-12
 
-- 165 people scored, 99% price coverage, 9 approved: McConnell, Morrison, Babin, Moran, Pelosi, McCormick, Sessions, Latta, Wittman.
-- Four of them (McConnell, Babin, Latta, Wittman) have only 12 to 14 trades. Recommendation given to the owner: raise `scoring.min_trades` to 20 before any real money.
-- Expect about 3 to 5 paper trades per month. Paper phase planned for two to three months.
+- The paper phase restarted on 2026-10-12 with a fresh database, 10,000 capital, no positions. The old database is kept on the server as `data/coattail.db.bak-20261012-194835`.
+- Reason for the restart: on 2026-10-02 the bot bought KOD 47 times in one run (235% of capital instead of the 8% ticker limit). The kill switch then tripped almost daily and every new signal was rejected. Fixed in PR #9.
+- After bootstrap: 149 people scored, 99% price coverage, 8 approved, all from Congress, among them Babin, Moran, Morrison, Sessions, McCormick, Pelosi, Latta.
+- Babin and Latta have only 12 to 14 trades. Recommendation given to the owner: raise `scoring.min_trades` to 20 before any real money.
+- Telegram is on. A manual test message arrived. Not yet seen: a message sent by the bot itself (daily report is scheduled for 21:05 UTC).
+- Expect about 3 to 5 paper trades per month. Paper phase planned for two to three months from 2026-10-12.
 
 ## Open items
 
-1. Check current state: `coattail report`, `coattail positions`, `coattail signals -n 20`, and `journalctl -u coattail --since "3 days ago" | grep -E "WARNING|ERROR|Bewertung fertig"`. Nothing since 2026-09-25 has been reviewed.
-2. Telegram notifications: offered, not set up yet (`notify.telegram_enabled`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
-3. Cosmetic: yfinance still prints ERROR lines for delisted tickers during `coattail score`. Harmless.
-4. Before real money: `min_trades: 20`, at least two to three months of paper results that beat SPY after fees, kill switch tested (`coattail kill` / `coattail resume`), then Alpaca live with a small amount.
+1. Routine check: `coattail report`, `coattail positions`, `coattail signals -n 20`, `coattail orders`, and `journalctl -u coattail --since "3 days ago" | grep -E "WARNING|ERROR|CRITICAL|Bewertung fertig"`. In `orders`, look for the same ticker bought several times at the same minute.
+2. Confirm with the owner that the bot's own Telegram messages arrive.
+3. `selectolax` has no upper bound in `pyproject.toml`. A rebuilt server venv would pull 1.0, which breaks the HTML parsing in `capitoltrades` and one social source. Both are off today.
+4. `max_open_positions` does not count buys planned in the same run. The 80% gross limit catches it.
+5. The kill switch logs a CRITICAL line every 5 minutes while active instead of once.
+6. Not looked into: why the service restarted on 2026-10-02 and 2026-10-04, and whether a fund like Baker Bros. Advisors (Form 4, 10% owner) is a sensible actor to copy.
+7. Cosmetic: yfinance still prints ERROR lines for delisted tickers during `coattail score`. Harmless.
+8. Before real money: `min_trades: 20`, at least two to three months of paper results that beat SPY after fees, kill switch tested (`coattail kill` / `coattail resume`), then Alpaca live with a small amount.
 
 ## Things learned the hard way
 
 - `pip install` on the server does nothing if the version did not change. `update.sh` force-reinstalls for that reason.
 - Scoring calls the price series about ten times per filing. Anything that is not cached gets hit again and again. The missing-list (`data/prices/_missing.json`) and the bulk prefetch exist because of this. If a scoring run hangs, check the log for Yahoo throttling first.
 - Delete `data/prices/_missing.json` if it was written while a price source was blocked.
+- Risk limits read positions from the database. Anything approved in the same run is not booked yet, so `_decide` passes the planned amounts to `RiskManager.evaluate`. One Form 4 filing can produce dozens of signals for the same ticker.
+- A fresh database loses the Form 4 actors until their filings have been collected again. The approved count drops for a while after `--reset-db`.

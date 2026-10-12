@@ -123,6 +123,7 @@ def _decide(
     plans: list[Plan] = []
     closes: list[tuple[int, str]] = []
     rejections: list[tuple[Signal, str]] = []
+    planned: dict[str, float] = {}
 
     with session_scope() as session:
         # Nach einem Absturz zwischen Entscheidung und Buchung bleiben Signale
@@ -170,7 +171,7 @@ def _decide(
                 closes.append((signal.id, signal.symbol))
                 continue
 
-            decision = risk.evaluate(session, signal)
+            decision = risk.evaluate(session, signal, planned)
             if not decision.approved:
                 signal.status = "rejected"
                 signal.reject_reason = decision.reason
@@ -180,6 +181,9 @@ def _decide(
                 continue
 
             signal.status = "pending"
+            planned[signal.symbol] = (
+                planned.get(signal.symbol, 0.0) + decision.quantity * decision.reference_price
+            )
             plans.append(
                 Plan(
                     signal_id=signal.id,

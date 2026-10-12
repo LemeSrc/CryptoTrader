@@ -21,6 +21,32 @@ def test_zu_wenige_trades_werden_abgelehnt(config, actor, prices):
     assert any("Trades" in r for r in stat.reasons)
 
 
+def test_verkaeufe_zaehlen_nicht_als_auswertbare_trades(config, actor, prices):
+    """Zwoelf Verkaeufe an einem Tag hatten am 12.10.2026 fuer eine Freigabe
+    gereicht, obwohl der Bot nur Kaeufe kopiert."""
+    with session_scope() as session:
+        for i in range(20):
+            session.add(
+                make_disclosure(actor.id, dt.date.today() - dt.timedelta(days=300 + i), "sell", seq=i)
+            )
+        session.add(make_disclosure(actor.id, dt.date.today() - dt.timedelta(days=300), "buy", seq=99))
+    with session_scope() as session:
+        stat = rescore_actor(session, session.get(Actor, actor.id), prices, ScoringConfig())
+    assert stat.n_trades == 1
+    assert stat.eligible is False
+
+
+def test_rueckschlag_rechnet_mit_positionsgroesse_nicht_mit_vollem_einsatz():
+    """Hundert Trades mit abwechselnd +40 und -30 Prozent sind im Schnitt gut.
+    Mit vollem Einsatz je Trade riss das trotzdem die Grenze von 60 Prozent."""
+    from coattail.scoring import metrics
+    from coattail.scoring.evaluate import COPY_STAKE
+
+    alphas = [0.4, -0.3] * 50
+    assert metrics.max_drawdown(alphas) > 0.6
+    assert metrics.max_drawdown([a * COPY_STAKE for a in alphas]) < 0.05
+
+
 def test_langer_meldeverzug_schliesst_aus(config, actor, prices):
     cfg = ScoringConfig(min_trades=1, min_score=0.0, min_win_rate=0.0, max_disclosure_lag_days=30)
     with session_scope() as session:

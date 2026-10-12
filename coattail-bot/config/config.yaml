@@ -60,7 +60,7 @@ scoring:
     freshness: 0.10
 
 notify:
-  telegram_enabled: false
+  telegram_enabled: true
   notify_on: [order, rejection, kill_switch, daily_summary]
   daily_summary_hour_utc: 21
 

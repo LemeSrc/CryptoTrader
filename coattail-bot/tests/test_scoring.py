@@ -121,3 +121,26 @@ def test_score_belohnt_bessere_kennzahlen():
     )
     cfg = ScoringConfig()
     assert score_from_evaluation(stark, cfg) > score_from_evaluation(schwach, cfg) + 20
+
+
+def test_schattenkonto_folgt_dem_verkauf_der_person(prices):
+    """Kauf AAA, Verkauf AAA 30 Tage spaeter: das Konto haelt 30 Tage, nicht 126.
+    Ein frischer Kauf BBB bleibt offen und zaehlt nicht als abgeschlossen."""
+    today = dt.date.today()
+    rows = [
+        make_disclosure(1, today - dt.timedelta(days=300), "buy", seq=1),
+        make_disclosure(1, today - dt.timedelta(days=270), "sell", seq=2),
+        make_disclosure(1, today - dt.timedelta(days=200), "buy", seq=3, symbol="CCC"),
+        make_disclosure(1, today - dt.timedelta(days=20), "buy", seq=4, symbol="BBB"),
+    ]
+    ev = evaluate_disclosure_actor(rows, prices, ScoringConfig())
+    konto = ev.detail["konto"]
+    assert ev.n_closed == 2
+    assert konto["ausstieg_verkauf"] == 1
+    assert konto["ausstieg_frist"] == 1
+    assert [p["symbol"] for p in konto["offen"]] == ["BBB"]
+    # 1 Prozent pro Tag gegen SPY mit 1 Prozent je 21 Tage, gehalten 30 und 126 Tage.
+    def alpha(days):
+        return (1.01**days - 1) - 0.01 * days / 21
+
+    assert abs(ev.expectancy - (alpha(30) + alpha(126)) / 2) < 1e-9

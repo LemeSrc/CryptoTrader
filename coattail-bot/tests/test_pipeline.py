@@ -5,7 +5,7 @@ import datetime as dt
 from sqlalchemy import select
 
 from coattail.db import session_scope
-from coattail.models import Actor, ActorStat, Disclosure, Signal
+from coattail.models import Actor, ActorStat, Disclosure, Position, Signal
 from coattail.pipeline.ingest import _store_trade
 from coattail.pipeline.signals import build_signals
 from coattail.settings import AppConfig, Secrets, SourceConfig
@@ -80,6 +80,30 @@ def test_freigegebene_person_erzeugt_signal(config):
     # Zweiter Lauf darf nichts verdoppeln
     assert build_signals(cfg, Secrets()) == 0
 
+
+
+def test_verkauf_ohne_freigabe_schliesst_eigene_position(config):
+    """Verliert jemand die Freigabe, muss sein Verkauf die kopierte Position
+    trotzdem schliessen. Kaeufe und fremde Titel bleiben gesperrt."""
+    cfg = AppConfig()
+    cfg.sources = [SourceConfig(name="posts_to_signals", kind="none", enabled=False)]
+    _store_trade(raw(symbol="LEO", side="sell"))
+    _store_trade(raw(symbol="MXF", side="sell"))
+    _store_trade(raw(symbol="CRBG"))
+    with session_scope() as session:
+        actor = session.scalar(select(Actor))
+        session.add(ActorStat(actor_id=actor.id, score=40.0, eligible=False, reasons=["weg"]))
+        for sym in ("LEO", "CRBG"):
+            session.add(Signal(
+                dedupe_key=f"alt-{sym}", actor_id=actor.id, origin="demo", origin_ref="0",
+                symbol=sym, asset_class="equity", side="buy", intent="open",
+                event_at=dt.datetime.now(dt.UTC), status="executed",
+            ))
+            session.add(Position(symbol=sym, broker="paper", quantity=5.0, avg_price=10.0))
+    assert build_signals(cfg, Secrets()) == 1
+    with session_scope() as session:
+        sig = session.scalar(select(Signal).where(Signal.side == "sell"))
+        assert (sig.symbol, sig.intent) == ("LEO", "close")
 
 def test_alte_meldung_erzeugt_kein_signal(config):
     alt = dt.datetime.now(dt.UTC) - dt.timedelta(days=30)

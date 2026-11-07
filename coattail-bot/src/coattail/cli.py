@@ -19,7 +19,7 @@ from .pipeline.ingest import ingest_all, ingest_source
 from .pipeline.reconcile import reconcile
 from .pipeline.signals import build_signals
 from .risk.manager import reset_kill_switch, trip_kill_switch
-from .scoring.score import latest_stat
+from .scoring.score import EXECUTION_SOURCES, latest_stat
 from .settings import get_secrets, load_config
 from .sources.registry import build_source
 from .tasks import daily_report, rescore_all
@@ -132,12 +132,14 @@ def score(
 def actors(
     top: int = typer.Option(25, "--top", "-n"),
     eligible_only: bool = typer.Option(False, "--eligible"),
+    krypto: bool = typer.Option(False, "--krypto", help="Krypto-Trader statt Politiker und Insider"),
     config: str = typer.Option(None, "--config", "-c"),
 ) -> None:
-    """Rangliste der beobachteten Personen."""
+    """Rangliste der beobachteten Personen, Krypto-Trader getrennt."""
     App.create(config)
     table = Table(title="Bewertung der Vorbilder")
-    for col in ("Name", "Typ", "Quelle", "Note", "Treffer", "Trades", "Verzug", "Erwartung", "Status"):
+    cols = ("Name", "Typ", "Quelle", "Note", "Treffer", "Trades", "Verzug", "Erwartung", "Konto", "Status")
+    for col in cols:
         table.add_column(col)
 
     with session_scope() as session:
@@ -155,7 +157,10 @@ def actors(
         )
         if eligible_only:
             stmt = stmt.where(ActorStat.eligible.is_(True))
+        is_crypto = Actor.source.in_(EXECUTION_SOURCES) | (Actor.actor_type == "trader")
+        stmt = stmt.where(is_crypto if krypto else ~is_crypto)
         for stat, actor in session.execute(stmt):
+            konto = (stat.detail or {}).get("konto", {})
             table.add_row(
                 actor.name[:28],
                 actor.actor_type,
@@ -165,6 +170,7 @@ def actors(
                 str(stat.n_closed),
                 f"{stat.median_lag_days:.0f}d",
                 f"{stat.expectancy:+.2%}",
+                f"{konto['mehrrendite_pct']:+.1f}%" if konto else "-",
                 "[green]kopieren[/green]" if stat.eligible else f"[dim]{stat.reasons[0][:34]}[/dim]",
             )
     console.print(table)

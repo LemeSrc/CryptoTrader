@@ -20,7 +20,7 @@ import statistics
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Actor, ActorStat, Disclosure, Post, Signal
+from ..models import Actor, ActorStat, Disclosure, Position, Post, Signal
 from ..nlp.classifier import HybridClassifier
 from ..scoring.score import latest_stat
 from ..settings import AppConfig, Secrets
@@ -46,6 +46,23 @@ def build_signals(config: AppConfig, secrets: Secrets) -> int:
         )
     log.info("%d neue Signale erzeugt", created)
     return created
+
+
+def _still_holding_from(session: Session, actor_id: int, d: Disclosure) -> bool:
+    """Ein Verkauf wird auch ohne Freigabe kopiert, wenn wir den Titel auf ein
+    Signal dieser Person hin halten. Sonst verwaist die Position, sobald die
+    Person ihre Freigabe verliert."""
+    if d.side != "sell":
+        return False
+    bought = session.scalar(
+        select(Signal.id).where(
+            Signal.actor_id == actor_id, Signal.symbol == d.symbol, Signal.side == "buy"
+        ).limit(1)
+    )
+    held = session.scalar(
+        select(Position.id).where(Position.symbol == d.symbol, Position.quantity > 0).limit(1)
+    )
+    return bool(bought and held)
 
 
 def _from_disclosures(session: Session, config: AppConfig) -> int:
@@ -87,7 +104,7 @@ def _from_disclosures(session: Session, config: AppConfig) -> int:
         if actor.id not in stats:
             stats[actor.id] = latest_stat(session, actor.id)
         stat = stats[actor.id]
-        if stat is None or not stat.eligible:
+        if (stat is None or not stat.eligible) and not _still_holding_from(session, actor.id, d):
             continue
 
         event_at = d.disclosed_at or dt.datetime.combine(
@@ -98,7 +115,8 @@ def _from_disclosures(session: Session, config: AppConfig) -> int:
         if d.option_type and not config.execution.allow_options:
             continue
 
-        conviction = _conviction(session, actor, d, stat.score)
+        score = stat.score if stat else 0.0
+        conviction = _conviction(session, actor, d, score)
 
         session.add(
             Signal(
@@ -116,11 +134,11 @@ def _from_disclosures(session: Session, config: AppConfig) -> int:
                 take_profit=d.take_profit,
                 size_hint_pct=None,
                 conviction=conviction,
-                actor_score=stat.score,
+                actor_score=score,
                 payload={
                     "actor": actor.name,
                     "actor_type": actor.actor_type,
-                    "win_rate": stat.win_rate_shrunk,
+                    "win_rate": stat.win_rate_shrunk if stat else None,
                     "lag_days": d.lag_days,
                     "amount": [d.amount_low, d.amount_high],
                 },

@@ -81,6 +81,20 @@ def evaluate_disclosure_actor(
     if not rows:
         return ev
 
+    # Schattenkonto: ein kopierter Kauf endet, sobald die Person einen Verkauf
+    # desselben Titels meldet, spaetestens nach dem laengsten Horizont.
+    # shortcut: ein Verkauf schliesst alle offenen Kaeufe des Titels ganz, die
+    # Meldungen nennen nur Betragsspannen; Teilverkaeufe erst mit echten Stueckzahlen.
+    sells: dict[str, list[tuple[dt.date, dt.date]]] = defaultdict(list)
+    for d in disclosures:
+        if d.symbol and d.side == "sell" and d.transaction_date:
+            known = d.disclosed_at.date() if d.disclosed_at else d.transaction_date
+            sells[d.symbol].append((known, d.transaction_date))
+    today = dt.date.today()
+    open_positions: list[dict[str, Any]] = []
+    exit_by_sell = 0
+    open_alpha: list[float] = []
+
     ev.n_trades = len(rows)
     horizon = max(cfg.horizons_days)
     lags: list[float] = []
@@ -108,13 +122,28 @@ def evaluate_disclosure_actor(
 
         disc_day = d.disclosed_at.date() if d.disclosed_at else None
         if disc_day:
-            a_disc = _alpha(prices, d.symbol, disc_day, horizon, cfg, d.asset_class)
-            if a_disc is not None:
-                value = direction * a_disc
-                alpha_disc.append(value)
-                by_year[str(disc_day.year)].append(value)
+            exit_day = min(
+                (k for k, t in sells[d.symbol] if k > disc_day and t >= d.transaction_date),
+                default=None,
+            )
+            by_sell = exit_day is not None and (exit_day - disc_day).days <= horizon
+            if not by_sell:
+                exit_day = disc_day + dt.timedelta(days=horizon)
+            still_open = exit_day > today
+            hold = ((today if still_open else exit_day) - disc_day).days
+            a_disc = _alpha(prices, d.symbol, disc_day, hold, cfg, d.asset_class)
+            if a_disc is None:
+                continue
+            value = direction * a_disc
+            if still_open:
+                open_alpha.append(value)
+                open_positions.append({"symbol": d.symbol, "seit": str(disc_day), "alpha": round(value, 4)})
+                continue
+            exit_by_sell += int(by_sell)
+            alpha_disc.append(value)
+            by_year[str(disc_day.year)].append(value)
 
-    if not alpha_disc:
+    if not alpha_disc and not open_alpha:
         # Ohne Meldedatum bleibt nur der Handelstag. Das ist optimistisch,
         # wird beim Gate aber ueber die fehlende Verzoegerung wieder eingefangen.
         alpha_disc = list(alpha_trade)
@@ -140,8 +169,16 @@ def evaluate_disclosure_actor(
         "wilson_win_rate": round(metrics.wilson_lower_bound(wins, len(alpha_disc)), 4),
         "sharpe_like": round(metrics.sharpe_like(alpha_disc), 3),
         "last_trade": str(last_active) if last_active else None,
-        "method": "alpha_vs_benchmark",
+        "method": "schattenkonto",
         "benchmark": cfg.benchmark,
+        # Mehrrendite des Kontos gegen den Vergleichsindex bei festem Einsatz je Kauf.
+        "konto": {
+            "mehrrendite_pct": round(sum(alpha_disc + open_alpha) * COPY_STAKE * 100, 2),
+            "geschlossen": len(alpha_disc),
+            "ausstieg_verkauf": exit_by_sell,
+            "ausstieg_frist": len(alpha_disc) - exit_by_sell,
+            "offen": open_positions,
+        },
     }
     return ev
 
@@ -248,6 +285,12 @@ def evaluate_execution_actor(
         "sharpe_like": round(metrics.sharpe_like(returns), 3),
         "open_lots": {k: len(v) for k, v in open_lots.items() if v},
         "method": "fifo_round_trips",
+        # Krypto ohne Vergleichsindex: hier ist es die Rendite selbst.
+        "konto": {
+            "mehrrendite_pct": round(sum(returns) * COPY_STAKE * 100, 2),
+            "geschlossen": len(returns),
+            "offen": [{"symbol": k} for k, v in open_lots.items() if v],
+        },
     }
     return ev
 

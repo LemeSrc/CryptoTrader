@@ -99,7 +99,9 @@ def _rescore_all(app: App, only_source: str | None, out: dict[str, int]) -> dict
                 stat = rescore_actor(session, actor, app.prices, app.config.scoring)
                 eligible = bool(stat.eligible)
                 trades_total += int(stat.n_trades or 0)
-                trades_priced += int(stat.n_closed or 0)
+                # Offene Positionen im Schattenkonto haben auch einen Kurs.
+                konto = (stat.detail or {}).get("konto", {})
+                trades_priced += int(stat.n_closed or 0) + len(konto.get("offen", []))
         except Exception as exc:  # noqa: BLE001
             log.warning("Bewertung von %s fehlgeschlagen: %s", name, exc)
             continue

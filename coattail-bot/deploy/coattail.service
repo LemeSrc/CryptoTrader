@@ -14,6 +14,9 @@ WorkingDirectory=/opt/coattail
 EnvironmentFile=/opt/coattail/.env
 ExecStart=/opt/coattail/.venv/bin/coattail run
 Environment=PYTHONUNBUFFERED=1
+# glibc legt pro Thread eigene Speicherbereiche an und gibt sie kaum zurueck.
+# Mit den Scheduler-Threads wuchs der Prozess so bis zum OOM-Kill.
+Environment=MALLOC_ARENA_MAX=2
 # Das Home-Verzeichnis ist unten gesperrt. yfinance legt seinen Cache sonst
 # dort ab und laeuft ohne ihn deutlich langsamer.
 Environment=XDG_CACHE_HOME=/opt/coattail/data/.cache

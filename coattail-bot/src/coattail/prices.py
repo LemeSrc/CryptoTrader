@@ -442,11 +442,13 @@ class PriceProvider:
         series = self.history(symbol, asset_class=asset_class)
         if series is None or series.empty:
             return None
-        stamp = pd.Timestamp(day)
-        window = series[series.index <= stamp]
-        if window.empty:
+        # Binaere Suche statt Maske: die Maske kopierte bei jedem Aufruf die ganze
+        # Reihe, die naechtliche Bewertung brauchte dadurch 75 Minuten und ueber
+        # die Tage Gigabytes. Setzt die sortierte Reihe aus _store voraus.
+        pos = series.index.searchsorted(pd.Timestamp(day), side="right")
+        if pos == 0:
             return None
-        return float(window.iloc[-1])
+        return float(series.iloc[pos - 1])
 
     def last_price(self, symbol: str, *, asset_class: str = "equity") -> float | None:
         """Aktueller Kurs. Live, wenn erreichbar, sonst letzter Tagesschluss."""

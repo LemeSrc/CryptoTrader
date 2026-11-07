@@ -195,3 +195,15 @@ def test_lauf_ohne_kurse_gilt_nicht_als_fertig(config, prices):
     assert result["kursabdeckung_prozent"] == 0
     assert result.get("abgebrochen") == 1
     assert scheduler._scores_fresh() is False
+
+
+def test_schlusskurs_am_oder_vor_dem_stichtag(tmp_path):
+    import pandas as pd
+
+    p = PriceProvider(cache_dir=tmp_path)
+    idx = pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-08"])
+    p._store("XYZ", pd.Series([10.0, 11.0, 12.0], index=idx))
+    assert p.close_on("XYZ", dt.date(2026, 1, 4)) is None
+    assert p.close_on("XYZ", dt.date(2026, 1, 6)) == 11.0
+    assert p.close_on("XYZ", dt.date(2026, 1, 7)) == 11.0
+    assert p.close_on("XYZ", dt.date(2026, 3, 1)) == 12.0
